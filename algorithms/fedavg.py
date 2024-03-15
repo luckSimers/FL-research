@@ -7,6 +7,7 @@ import torch.optim as optim
 from torch.utils.data import DataLoader
 from utils import *
 from algorithms import ClientBase, ServerBase
+from torch.nn.utils.clip_grad import clip_grad_norm_
 
 
 class FedAvg(ServerBase):
@@ -37,7 +38,7 @@ class Client(ClientBase):
                 loss = self.loss(logits, y)
                 self.optimizer.zero_grad()
                 loss.backward()
-                nn.utils.clip_grad_norm_(self.model.parameters(), self.clip_grad)
+                clip_grad_norm_(self.model.parameters(), self.clip_grad)
                 self.optimizer.step()
                 
         logging.info(f'C{self.id:<2d}>> training cost {(time.time() - st)/60:.2f} min')

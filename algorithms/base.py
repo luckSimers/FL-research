@@ -5,8 +5,8 @@ import time
 from sklearn.metrics import confusion_matrix
 import torch.optim as optim
 from torch.utils.data import DataLoader
-from torch.nn.utils import clip_grad_norm_
-from datasets import Subset4FL, FinetuneSet
+from torch.nn.utils.clip_grad import clip_grad_norm_
+from datasets import Subset4FL
 
 shape = {
     'CIFAR10': [3, 32, 32],
@@ -61,7 +61,6 @@ class ServerBase(object):
         self.optimizer = get_optimizer(self.global_model, optim_name=args.optim, lr=args.lr, momentum=args.momentum, weight_decay=args.weight_decay)
         self.scheduler = get_cosine_schedule_with_warmup(self.optimizer, num_training_steps=self.global_rounds, num_warmup_steps=0)
         
-
     def make_model(self):
         logging.debug('Building models')
         net_builder = get_net_builder(self.net)
@@ -133,6 +132,7 @@ class ServerBase(object):
         rewrite this function if you wanna use a more complex algorithm
         """
         for round_idx in range(self.global_rounds):
+            logging.info(f'Round {round_idx}/{self.global_rounds}...')
             st_time = time.time()
             self.selected_clients = self.select_clients()
             lr = self.scheduler.get_last_lr()[0]
@@ -140,7 +140,7 @@ class ServerBase(object):
             for i, client in enumerate(self.selected_clients):
                client.train(round_idx, lr, model_dict)
 
-            self.receive_messages(round_idx)
+            self.receive_messages()
             self.aggregator.aggregate(self.uploaded_models)
             if self.args.ft:
                 self.train(round_idx)

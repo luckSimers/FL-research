@@ -4,6 +4,7 @@ import time
 import logging
 import torch.nn as nn
 import torch.optim as optim
+from torch.nn.utils.clip_grad import clip_grad_norm_
 from torch.utils.data import DataLoader
 from utils import *
 from algorithms import ClientBase, ServerBase
@@ -44,7 +45,7 @@ class Client(ClientBase):
                 for p, anchor_p in zip(self.model.parameters(), anchor.parameters()):
                     p.grad += self.mu * (p.data - anchor_p.data.detach())
                 if self.clip_grad > 0:
-                    nn.utils.clip_grad_norm_(self.model.parameters(), self.clip_grad)
+                    clip_grad_norm_(self.model.parameters(), self.clip_grad)
                 self.optimizer.step()
         self.model.to('cpu')
         logging.info(f'C{self.id:<2d}>> training cost {(time.time() - st)/60:.2f} min')

@@ -3,6 +3,8 @@ import time
 from torch.utils.data import DataLoader
 from utils import *
 from sklearn.metrics import confusion_matrix
+import torch.nn as nn
+from torch.nn.utils.clip_grad import clip_grad_norm_
 
 class Centralized(object):
 
@@ -37,7 +39,7 @@ class Centralized(object):
             loss = self.loss(logits, y)
             self.optimizer.zero_grad()
             loss.backward()
-            nn.utils.clip_grad_norm_(self.model.parameters(), self.clip_grad)
+            clip_grad_norm_(self.model.parameters(), self.clip_grad)
             self.optimizer.step()
         logging.info(f'>> training cost {(time.time() - st)/60:.2f} min')
 
@@ -62,6 +64,7 @@ class Centralized(object):
         rewrite this function if you wanna use a more complex algorithm
         """
         for round_idx in range(self.global_rounds):
+            logging.info(f'Round {round_idx}/{self.global_rounds}...')
             st_time = time.time()
             self.train(round_idx)
             self.scheduler.step()
