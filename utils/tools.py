@@ -133,3 +133,26 @@ class Special_Argument(object):
         self.type = type
         self.default = default
         self.help = help
+
+
+def plot_tsne(model, dataloader, device, use_prototype=False):
+    model.eval()
+    all_reps = []
+    all_y = []
+    for data in dataloader:
+        x, y = data['x_lb'].to(device), data['y_lb'].to(device)
+        with torch.no_grad():
+            reps = model.base(x)
+            all_reps.append(reps)
+            all_y.append(y)
+    reps = torch.cat(all_reps, dim=0)
+    y = torch.cat(all_y, dim=0)
+
+    from sklearn.manifold import TSNE
+    import matplotlib.pyplot as plt
+    tsne = TSNE(n_components=2, init='pca', random_state=0)
+    X_tsne = tsne.fit_transform(reps.cpu().numpy())
+    plt.figure(figsize=(10, 10))
+    plt.scatter(X_tsne[:, 0], X_tsne[:, 1], c=y.cpu().numpy(), s=10, cmap='Set1_r')
+    plt.colorbar(ticks=range(3))
+    plt.savefig(f'{use_prototype}_tsne.png')

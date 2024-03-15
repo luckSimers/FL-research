@@ -54,16 +54,17 @@ def get_config():
     parser.add_argument('--load_path', type=str, default='')
     '''
     '''
-    parser.add_argument('--global_rounds', type=int, default=200)
+    
     parser.add_argument('--eval_gap', type=int, default=1, help='evaluation frequency')
     parser.add_argument('--log_gap', type=int, default=1, help='logging frequency')
     parser.add_argument('--batch_size', type=int, default=256)
     parser.add_argument('--c_batch_size', type=int, default=128)
-    parser.add_argument('--eval_bs', type=int, default=128,
+    parser.add_argument('--eval_bs', type=int, default=256,
                         help='batch size of evaluation data loader (it does not affect the accuracy)')
     '''
     Optimizer configurations
     '''
+    parser.add_argument('--sBN', type=bool, default=False, help='use sBN or not')
     parser.add_argument('--optim', type=str, default='SGD')
     parser.add_argument('--lr', type=float, default=3e-2)
     parser.add_argument('--momentum', type=float, default=0.9)
@@ -79,7 +80,6 @@ def get_config():
     '''  
     ## core algorithm setting
     parser.add_argument('--algorithm', type=str, default='centralized', help='ssl algorithm')
-    parser.add_argument('--ft', type=bool, default=False, help='server finetuning or not')
     parser.add_argument('--ft_data_per_cls', type=int, default=10, help='data per class for server finetuning')
     '''
     Data Configurations
@@ -89,10 +89,11 @@ def get_config():
     parser.add_argument('--dataset', type=str, default='cifar10')
     parser.add_argument('--num_workers', type=int, default=1)
     ## Federated Learning setting configurations
+    parser.add_argument('--global_rounds', type=int, default=200)
+    parser.add_argument('--local_steps', type=int, default=5, help='number of local steps')
     parser.add_argument('--client_num', type=int, default=10)
     parser.add_argument('--join_ratio', type=float, default=0.2, help='ratio of clients to join in each round')
     parser.add_argument('--split_type', type=str, default='iid', help='type of heterogeneity')
-    parser.add_argument('--local_steps', type=int, default=5, help='number of local steps')
     parser.add_argument('--agg', type=str, default='average', help='aggregation method: average, weighted_average, KD')
 
     # system config：
@@ -115,9 +116,9 @@ def get_config():
     over_write_args_from_file(args, args.c)
 
     args.exp_tag = f'{args.dataset}'
-    if args.algorithm == 'alone':
+    if args.algorithm == 'centralized':
         args.exp_tag += f'_{args.algorithm}'
-    elif args.algorithm == 'fedavg':
+    else:
         args.exp_tag += f'_{args.algorithm}_{args.split_type}_{args.client_num}'
 
     for argument in name2algo[args.algorithm].get_argument():
@@ -138,12 +139,12 @@ def init_wandb(args):
     bs = f'bs={args.batch_size}'
     ds = f'ds={args.dataset}'
     net = f'net={args.net}'
-    if args.algorithm == 'alone':
+    if args.algorithm == 'centralized':
         tags = [alg, bs, ds, net]
     else:
         st = f'st={args.split_type}'
         nc = f'nc={args.client_num}'
-        
+        ft = f'ft={args.ft_data_per_cls}'
         tags = [ alg, bs, ds, st, nc, net]
 
     run = wandb.init(name=name, 

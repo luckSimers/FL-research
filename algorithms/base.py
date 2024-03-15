@@ -54,9 +54,13 @@ class ServerBase(object):
             self.batchnorm_dataset = self.make_norm_dataset()
         self.make_client(args, Client)
         self.make_model()
+        self.make_optimizer(args)
+        self.aggregator = Aggregator(self.agg, self.local_data_num, self.global_model)
+
+    def make_optimizer(self, args):
         self.optimizer = get_optimizer(self.global_model, optim_name=args.optim, lr=args.lr, momentum=args.momentum, weight_decay=args.weight_decay)
         self.scheduler = get_cosine_schedule_with_warmup(self.optimizer, num_training_steps=self.global_rounds, num_warmup_steps=0)
-        self.aggregator = Aggregator(self.agg, self.local_data_num, self.global_model)
+        
 
     def make_model(self):
         logging.debug('Building models')
@@ -76,25 +80,31 @@ class ServerBase(object):
         
     def make_dataset(self, args):
         logging.debug('Loading and spliting dataset')
-        data_info = fetch_fl_dataset(args.dataset, args.data_dir, args.split_type, args.client_num)
+        data_info = fetch_fl_dataset(args.dataset, args.data_dir, args.split_type, args.client_num, args.ft_data_per_cls)
         self.trainset, self.testset = data_info['train_ds'], data_info['test_ds']
         self.client_data_idx = data_info['client_idx']
         self.class_num = data_info['class_num']
         self.local_data_num = data_info['local_data_num']
         self.local_distribution = data_info['local_distribution']
-        if self.args.ft:
-            trainset = FinetuneSet(self.dataset, self.trainset, self.args.ft_data_per_cls)
-            self.train_loader = DataLoader(trainset, batch_size=self.args.batch_size, shuffle=True)
-
+        if args.ft_data_per_cls > 0:
+            self.ft_idx = data_info['ft_idx']
+            ft_set = Subset4FL(self.dataset, self.trainset, dataidxs=self.ft_idx)
+            self.ft_loader = DataLoader(ft_set, batch_size=args.batch_size, shuffle=True)
+            
     def select_clients(self):
         selected_clients = list(np.random.choice(self.clients, self.num_join_clients, replace=False))
         return selected_clients
     
-    def receive_messages(self, round_idx):
+    def receive_messages(self):
         """
-        collect local models
+        collect models, training samples
         """
-        raise NotImplementedError
+        logging.info('Receiving models from clients')
+        self.uploaded_models = {}
+        for i, client in enumerate(self.selected_clients):
+            id = client.id
+            model = copy.deepcopy(client.model).to(self.device)
+            self.uploaded_models[id] = model
     
     def train(self, round):
         st = time.time()
@@ -102,7 +112,7 @@ class ServerBase(object):
         ce_loss = nn.CrossEntropyLoss()
         clip_grad = self.args.clip_grad
         for epoch in range(self.local_steps):
-            for x, y in self.train_loader:
+            for x, y in self.ft_loader:
                 x, y = x.to(self.device), y.to(self.device)
                 self.optimizer.zero_grad()
                 logits = self.global_model(x)
@@ -111,7 +121,7 @@ class ServerBase(object):
                 if clip_grad > 0:
                     clip_grad_norm_(self.global_model.parameters(), clip_grad)
                 self.optimizer.step()
-        print(f"server_train_time>> {(time.time() - st) / 60:.2f} min")
+        logging.info(f"server_train_time>> {(time.time() - st) / 60:.2f} min")
             
     def run(self):
         """
@@ -123,7 +133,6 @@ class ServerBase(object):
         rewrite this function if you wanna use a more complex algorithm
         """
         for round_idx in range(self.global_rounds):
-            print(f'--------------{round_idx}-----------------')
             st_time = time.time()
             self.selected_clients = self.select_clients()
             lr = self.scheduler.get_last_lr()[0]
@@ -140,7 +149,7 @@ class ServerBase(object):
             if self.sBN:
                 make_batchnorm_stats(self.batchnorm_dataset, self.global_model, self.device)
             self.test(round_idx)
-            print(f'time cost {(time.time() - st_time)/60:.2f} min')
+            logging.info(f'time cost {(time.time() - st_time)/60:.2f} min')
     
 
     @torch.no_grad()
@@ -179,7 +188,8 @@ class ServerBase(object):
         logging.info(f'------ test acc: {test_acc:.2f}% & best acc: {self.best_acc:.2f}%')
         log_dict = {'test-top1_acc': test_acc, 'test-best_acc': self.best_acc}
         self.logger.log(log_dict, step=round_idx)
-        self.save_model(round_idx, best=best)
+        if best:
+            self.save_model(round_idx, best=best)
         logging.info(f"server_test_time>> {(time.time() - st) / 60:.2f} min")
 
 
@@ -214,13 +224,17 @@ class ClientBase(object):
         self.exp_tag = args.exp_tag
         self.device = torch.device('cuda:0')
         self.make_model()
-        self.optimizer = get_optimizer(self.model, optim_name=args.optim, lr=args.lr, momentum=args.momentum, weight_decay=args.weight_decay)
-        self.optimizer_dict = self.optimizer.state_dict()
+        self.make_optimizer(args)
+     
 
     def make_model(self):
         logging.debug('Building models')
         net_builder = get_net_builder(self.net)
         self.model = net_builder(self.class_num).to(self.device)
+    
+    def make_optimizer(self, args):
+        self.optimizer = get_optimizer(self.model, optim_name=args.optim, lr=args.lr, momentum=args.momentum, weight_decay=args.weight_decay)
+        self.optimizer_dict = self.optimizer.state_dict()
 
     def set_parameters(self, state_dict):
         self.model.load_state_dict(state_dict)

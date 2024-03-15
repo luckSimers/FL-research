@@ -62,12 +62,11 @@ class Centralized(object):
         rewrite this function if you wanna use a more complex algorithm
         """
         for round_idx in range(self.global_rounds):
-            print(f'--------------{round_idx}-----------------')
             st_time = time.time()
             self.train(round_idx)
             self.scheduler.step()
             self.test(round_idx)
-            print(f'time cost {(time.time() - st_time)/60:.2f} min')
+            logging.info(f'time cost {(time.time() - st_time)/60:.2f} min')
     
 
     @torch.no_grad()
@@ -106,7 +105,8 @@ class Centralized(object):
         logging.info(f'------ test acc: {test_acc:.2f}% & best acc: {self.best_acc:.2f}%')
         log_dict = {'test-top1_acc': test_acc, 'test-best_acc': self.best_acc}
         self.logger.log(log_dict, step=round_idx)
-        self.save_model(round_idx, best=best)
+        if best:
+            self.save_model(round_idx, best=best)
         logging.info(f"server_test_time>> {(time.time() - st) / 60:.2f} min")
 
 

@@ -78,7 +78,7 @@ class TwoHead(nn.Module):
         return logits
 
 
-def fetch_fl_dataset(dataset_name, data_root, partition_type='iid', client_num=1):
+def fetch_fl_dataset(dataset_name, data_root, partition_type='iid', client_num=1, ft_data=0):
     """
     fetch dataset
     return:
@@ -91,7 +91,7 @@ def fetch_fl_dataset(dataset_name, data_root, partition_type='iid', client_num=1
         'client_idx',
     }
     """
-    dataset = FetchData(dataset_name, data_root, partition_type, client_num)
+    dataset = FetchData(dataset_name, data_root, partition_type, client_num, ft_data=ft_data)
     train_ds, test_ds, local_data_num, class_num, other_params = dataset.load_data()
     data_info = {
         'train_ds': train_ds,
@@ -100,6 +100,7 @@ def fetch_fl_dataset(dataset_name, data_root, partition_type='iid', client_num=1
         'class_num': class_num,
         'local_distribution': other_params['local_counts'],
         'client_idx': other_params['client_idx'],
+        'ft_idx': other_params['ft_idx'],
     }
     return data_info
 
@@ -174,16 +175,3 @@ def get_cosine_schedule_with_warmup(optimizer,
 
     return LambdaLR(optimizer, _lr_lambda, last_epoch)
 
-
-def get_port():
-    """
-    find a free port to used for distributed learning
-    """
-    pscmd = "netstat -ntl |grep -v Active| grep -v Proto|awk '{print $4}'|awk -F: '{print $NF}'"
-    procs = os.popen(pscmd).read()
-    procarr = procs.split("\n")
-    tt= random.randint(15000, 30000)
-    if tt not in procarr:
-        return tt
-    else:
-        return get_port()

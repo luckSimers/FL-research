@@ -44,6 +44,7 @@ class FetchData(object):
             datadir="./",
             partition_type="iid", 
             client_number=1, 
+            ft_data=0,
             num_workers=4, 
             ):
 
@@ -54,12 +55,13 @@ class FetchData(object):
         self.partition_type = partition_type
         self.client_number = client_number
         self.num_workers = num_workers
+        self.ft_data = ft_data
         self.other_params = {}
 
 
     def load_data(self):
         if self.client_number > 1:
-            train_ds, test_ds = self.federated_standalone_split() 
+            train_ds, test_ds = self.federated_split() 
             self.other_params["local_counts"] = self.local_counts
             self.other_params["client_idx"] = self.client_idx
             return train_ds, test_ds, self.local_data_num, self.class_num, self.other_params
@@ -144,11 +146,21 @@ class FetchData(object):
         return y_train_np
 
 
-    def federated_standalone_split(self):
-        logging.debug("federated_standalone_split")
+    def federated_split(self):
+        logging.debug("federated_split")
         train_ds, test_ds = self.fetch_dataset()
-        y_train_np = self.get_y_train_np(train_ds)  
+        self.other_params['ft_idx'] = None
+        if self.ft_data > 0:
+            targets = np.array(train_ds.targets)
+            idx = []
+            for i in range(len(train_ds.classes)):
+                idx_i = np.where(targets == i)[0]
+                np.random.shuffle(idx_i)
+                idx_i = idx_i[:self.ft_data]
+                idx.extend(idx_i)
+            self.other_params['ft_idx'] = idx
 
+        y_train_np = self.get_y_train_np(train_ds)  
         self.global_train_num = y_train_np.shape[0]
         self.global_test_num = len(test_ds) 
 
