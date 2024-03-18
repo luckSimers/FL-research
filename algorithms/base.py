@@ -28,7 +28,6 @@ classes = {
 class ServerBase(object):
     def __init__(self, args, Client) -> None:
         self.algorithm = args.algorithm
-        self.agg = args.agg
         self.args = args
         self.best_acc = 0
         self.current_round = 0
@@ -45,17 +44,19 @@ class ServerBase(object):
         self.net = args.net
         self.save_dir = args.save_dir
         self.sBN = args.sBN
+        self.global_m = args.global_momentum
         self.selected_clients = []
         self.uploaded_models = []
         self.make_dataset(args)
-        args.class_num = self.class_num
-        self.test_loader = DataLoader(self.testset, batch_size=args.eval_bs, shuffle=False)
-        if self.sBN:
-            self.batchnorm_dataset = self.make_norm_dataset()
         self.make_client(args, Client)
         self.make_model()
         self.make_optimizer(args)
-        self.aggregator = Aggregator(self.agg, self.local_data_num, self.global_model)
+        self.aggregator = Aggregator(self.local_data_num, self.global_model, self.global_m)
+        if self.sBN:
+            self.batchnorm_dataset = self.make_norm_dataset()
+        self.ft = False
+        if args.ft_data_per_cls > 0:
+            self.ft = True
 
     def make_optimizer(self, args):
         self.optimizer = get_optimizer(self.global_model, optim_name=args.optim, lr=args.lr, momentum=args.momentum, weight_decay=args.weight_decay)
@@ -83,8 +84,10 @@ class ServerBase(object):
         self.trainset, self.testset = data_info['train_ds'], data_info['test_ds']
         self.client_data_idx = data_info['client_idx']
         self.class_num = data_info['class_num']
+        args.class_num = self.class_num
         self.local_data_num = data_info['local_data_num']
         self.local_distribution = data_info['local_distribution']
+        self.test_loader = DataLoader(self.testset, batch_size=args.eval_bs, shuffle=False)
         if args.ft_data_per_cls > 0:
             self.ft_idx = data_info['ft_idx']
             ft_set = Subset4FL(self.dataset, self.trainset, dataidxs=self.ft_idx)
@@ -113,6 +116,8 @@ class ServerBase(object):
         for epoch in range(self.local_steps):
             for x, y in self.ft_loader:
                 x, y = x.to(self.device), y.to(self.device)
+                if len(y) < 2:
+                    continue
                 self.optimizer.zero_grad()
                 logits = self.global_model(x)
                 loss = ce_loss(logits, y)
@@ -142,7 +147,7 @@ class ServerBase(object):
 
             self.receive_messages()
             self.aggregator.aggregate(self.uploaded_models)
-            if self.args.ft:
+            if self.ft:
                 self.train(round_idx)
             torch.cuda.empty_cache()
             self.scheduler.step()
@@ -251,30 +256,28 @@ class ClientBase(object):
 
 
 class Aggregator(object):
-    def __init__(self, agg, client_data_num, global_model) -> None:
+    def __init__(self, client_data_num, global_model, global_m) -> None:
         self.device = torch.device('cuda:0')
-        self.agg = agg
         self.client_data_num = client_data_num
         self.global_model = global_model
-        self.global_optimizer = get_optimizer(global_model, optim_name='SGD', lr=1, momentum=0.5, weight_decay=0, nesterov=False)
+        if global_m > 0:
+            self.global_optimizer = get_optimizer(global_model, optim_name='SGD', lr=1, momentum=global_m, weight_decay=0, nesterov=False)
+        else:
+            self.global_optimizer = None
 
-    
     def aggregate(self, uploaded_models):
         logging.debug('Performing aggregation')
         st = time.time()
         
         weight = []
-        if self.agg == 'average':
-            weight = [1 / len(uploaded_models)] * len(uploaded_models)
-        elif self.agg == 'weighted_average':
-            for i in uploaded_models.keys():
-                weight.append(self.client_data_num[i])
-            weight = [w / sum(weight) for w in weight]
+
+        for i in uploaded_models.keys():
+            weight.append(self.client_data_num[i])
+        weight = [w / sum(weight) for w in weight]
         models = []
         for i in uploaded_models.keys():
             models.append(uploaded_models[i].state_dict())
         with torch.no_grad():
-            
             shadow_dict = models[0]
             for i in range(len(models)):
                 w = weight[i]
@@ -285,17 +288,19 @@ class Aggregator(object):
                 else:
                     for key in shadow_dict.keys():
                         shadow_dict[key] += model[key] * w
-            self.global_model.load_state_dict(shadow_dict)
-            # self.global_optimizer.zero_grad()
-            # for k, v in self.global_model.state_dict().items():
-            #     if 'weight' in k or 'bias' in k:
-            #         continue
-                
-            #     v.data = shadow_dict[k].data.clone()
+            if self.global_optimizer is None:
+                self.global_model.load_state_dict(shadow_dict)
+            else: 
+                raise NotImplementedError       
+                # self.global_optimizer.zero_grad()
+                # for k, v in self.global_model.named_parameters():
+                #     if 'weight' in k or 'bias' in k:
+                #         continue
+                #     v.data = shadow_dict[k].data.clone()
 
-            # for name, param in self.global_model.named_parameters():
-            #     param.grad = (param.data - shadow_dict[name].data).detach()
+                # for name, param in self.global_model.named_parameters():
+                #     param.grad = (param.data - shadow_dict[name].data).detach()
 
-            # self.global_optimizer.step()
+                # self.global_optimizer.step()
 
         logging.info(f'Time cost of aggregation: {(time.time() - st) / 60:.2f} min')   
