@@ -35,6 +35,8 @@ class Centralized(object):
         self.model.train(True)
         for x, y in self.train_loader:
             x, y = x.to(self.device), y.to(self.device)
+            if len(y) < 2:
+                continue
             logits = self.model(x)
             loss = self.loss(logits, y)
             self.optimizer.zero_grad()
