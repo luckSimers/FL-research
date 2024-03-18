@@ -36,9 +36,13 @@ def str2bool(v):
 
 from algorithms import FedAvg
 from algorithms import Centralized
+from algorithms import FedProx, FedDyn, SCAFFOLD
 name2algo = {
     'centralized': Centralized,
     'fedavg': FedAvg,
+    'fedprox': FedProx,
+    'feddyn': FedDyn,
+    'scaffold': SCAFFOLD,
 
 }
 
@@ -79,8 +83,8 @@ def get_config():
     Algorithms Configurations
     '''  
     ## core algorithm setting
-    parser.add_argument('--algorithm', type=str, default='centralized', help='ssl algorithm')
-    parser.add_argument('--ft_data_per_cls', type=int, default=10, help='data per class for server finetuning')
+    parser.add_argument('--algorithm', type=str, default='fedavg', help='')
+    parser.add_argument('--ft_data_per_cls', type=int, default=0, help='data per class for server finetuning')
     '''
     Data Configurations
     '''
@@ -88,18 +92,19 @@ def get_config():
     parser.add_argument('--data_dir', type=str, default='/remote-home/hongquanliu/Datasets')
     parser.add_argument('--dataset', type=str, default='cifar10')
     parser.add_argument('--num_workers', type=int, default=1)
+
     ## Federated Learning setting configurations
-    parser.add_argument('--global_rounds', type=int, default=200)
-    parser.add_argument('--local_steps', type=int, default=5, help='number of local steps')
+    parser.add_argument('--global_rounds', type=int, default=100)
+    parser.add_argument('--global_momentum', type=float, default=0., help='global momentum')
+    parser.add_argument('--local_steps', type=int, default=10, help='number of local steps')
     parser.add_argument('--client_num', type=int, default=10)
-    parser.add_argument('--join_ratio', type=float, default=0.2, help='ratio of clients to join in each round')
+    parser.add_argument('--join_ratio', type=float, default=1, help='ratio of clients to join in each round')
     parser.add_argument('--split_type', type=str, default='iid', help='type of heterogeneity')
-    parser.add_argument('--agg', type=str, default='average', help='aggregation method: average, weighted_average, KD')
 
     # system config：
     parser.add_argument('--level', type=str, default='info', help='logging level',)
     parser.add_argument('--seed', type=int, default=100)
-    parser.add_argument('--visible_gpu', type=str, default='4')
+    parser.add_argument('--visible_gpu', type=str, default='0')
   
     # config file
     parser.add_argument('--c', type=str, default='')
