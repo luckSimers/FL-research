@@ -19,10 +19,10 @@ data_stats = {'MNIST': ((0.1307,), (0.3081,)), 'FashionMNIST': ((0.2860,), (0.35
               'STL10': ((0.4409, 0.4279, 0.3868), (0.2683, 0.2610, 0.2687))}
 
 
-def record_net_data_stats(y_train, net_dataidx):
+def record_data_stats(y_train, client_dataidx):
     client_train_cls_counts_dict = {}
 
-    for client_idx, dataidx in enumerate(net_dataidx):
+    for client_idx, dataidx in enumerate(client_dataidx):
         unq, unq_cnt = np.unique(y_train[dataidx], return_counts=True) 
         tmp = {unq[i]: unq_cnt[i] for i in range(len(unq))}
         client_train_cls_counts_dict[client_idx] = tmp
@@ -184,7 +184,7 @@ class FetchData(object):
         if os.path.exists(load_path):
             logging.debug("directly loading existing partition from: " + load_path)
             client_idx = np.load(load_path, allow_pickle=True)
-            local_counts = record_net_data_stats(y_train_np, client_idx)
+            local_counts = record_data_stats(y_train_np, client_idx)
             return client_idx, local_counts
         
 
@@ -199,14 +199,11 @@ class FetchData(object):
             logging.debug('dirichlet Partitioning')
             alpha = float(self.partition_type.split('_')[1])
             min_size = 0
-            K = self.class_num    
-            N = y_train_np.shape[0] 
-            logging.info("N = " + str(N))
             client_idx = {}  
-            while min_size < K:
+            while min_size < self.class_num  :
                 idx_batch = [[] for _ in range(self.client_number)]
               
-                for k in range(K): 
+                for k in range(self.class_num): 
                     idx_k = np.where(y_train_np == k)[0]
                     np.random.shuffle(idx_k)
                     proportions = np.random.dirichlet(np.repeat(alpha, self.client_number))
@@ -220,35 +217,38 @@ class FetchData(object):
                 np.random.shuffle(idx_batch[j])
                 client_idx[j] = idx_batch[j]
 
-        elif self.partition_type.startswith('path'):
+        elif self.partition_type.startswith('pat'):
             logging.debug('Pathological partitioning')
             shard_per_user = int(self.partition_type.split('_')[1])
             client_idx = {}  
             shard_per_class = int(shard_per_user * self.client_number / self.class_num)
-            target_idx_split = {}
-            for target_i in range(self.class_num):
-                target_idx = np.where(y_train_np == target_i)[0]
-                num_leftover = len(target_idx) % shard_per_class
-                leftover = target_idx[-num_leftover:] if num_leftover > 0 else []
-                new_target_idx = target_idx[:-num_leftover] if num_leftover > 0 else target_idx
-                new_target_idx = np.split(new_target_idx, shard_per_class)
+            target_split = {}
+            for k in range(self.class_num):
+                idx_k = np.where(y_train_np == k)[0]
+                num_leftover = len(idx_k) % shard_per_class
+                leftover = idx_k[-num_leftover:] if num_leftover > 0 else []
+                new_idx_k = idx_k[:-num_leftover] if num_leftover > 0 else idx_k
+                new_idx_k = np.split(new_idx_k, shard_per_class)
                 for i, leftover_target_idx in enumerate(leftover):
-                    new_target_idx[i] = np.append(new_target_idx[i], leftover_target_idx)
-                target_idx_split[target_i] = new_target_idx
-            target_split = np.array(list(range(self.class_num)) * shard_per_class)
-            target_split = np.random.permutation(target_split).reshape((self.client_number, -1))
+                    new_idx_k[i] = np.append(new_idx_k[i], leftover_target_idx)
+                target_split[k] = new_idx_k
+            target_shard = np.array(list(range(self.class_num)) * shard_per_class)
+            target_shard = np.random.permutation(target_shard).reshape((self.client_number, -1))
             for i in range(self.client_number):
-                for target_i in target_split[i]:
-                    idx = np.random.randint(len(target_idx_split[target_i]))
-                    client_idx[i] = np.append(client_idx[i], target_idx_split[target_i][idx])
-                    target_idx_split[target_i] = np.delete(target_idx_split[target_i], idx, axis=0)
+                client_idx[i] = np.array([], dtype=int)
+                for k in target_shard[i]:
+                    idx = np.random.randint(len(target_split[k]))
+                    client_idx[i] = np.append(client_idx[i], target_split[k][idx])
+                    target_split[k] = np.delete(target_split[k], idx, axis=0)
 
-
+        else:
+            raise NotImplementedError
+        print(client_idx)
         client_idx = [client_idx[i] for i in range(self.client_number)]
         os.makedirs(os.path.dirname(load_path), exist_ok=True)
         np.save(load_path, client_idx)
         logging.debug("partition saved to: " + load_path)
-        local_counts = record_net_data_stats(y_train_np, client_idx)
+        local_counts = record_data_stats(y_train_np, client_idx)
 
         return client_idx, local_counts
 
