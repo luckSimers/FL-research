@@ -1,4 +1,6 @@
-# This file contains the implementation of FedAvg algorithm
+# This file contains the implementation of FedProx algorithm
+# Fedrated optimization in heterogeneous networks(https://arxiv.org/abs/1812.06127)
+# FedProx: proximal term is added to punish updates that are far away from global model
 import copy
 import time
 import logging
@@ -38,6 +40,8 @@ class Client(ClientBase):
         for step in range(self.local_steps):
             for x, y in loader:
                 x, y = x.to(self.device), y.to(self.device)
+                if len(y) < 2:
+                    continue
                 logits = self.model(x)
                 loss = self.loss(logits, y)
                 self.optimizer.zero_grad()
