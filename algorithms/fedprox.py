@@ -34,11 +34,10 @@ class Client(ClientBase):
     def train(self, round_idx, lr, state_dict):
         st = time.time()
         self.prepare(lr, state_dict)
-        loader = DataLoader(self.trainset, batch_size=self.batch_size, shuffle=True)
         anchor = copy.deepcopy(self.model).to(self.device)
         self.model.train(True)
         for step in range(self.local_steps):
-            for x, y in loader:
+            for x, y in self.loader:
                 x, y = x.to(self.device), y.to(self.device)
                 if len(y) < 2:
                     continue
