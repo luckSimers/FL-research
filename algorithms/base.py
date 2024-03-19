@@ -115,7 +115,7 @@ class ServerBase(object):
     def aggregate(self):
         logging.debug('Performing aggregation')
         st = time.time()
-        model_num = len(self.uploaded_models)
+        
         sample_num = sum(self.uploaded_weights)
         weights = [w / sample_num for w in self.uploaded_weights]
 
@@ -178,7 +178,7 @@ class ServerBase(object):
                client.train(round_idx, lr, self.global_model)
 
             self.receive_messages()
-            self.aggregator.aggregate(self.uploaded_models)
+            self.aggregate()
             if self.ft:
                 self.train(round_idx)
             torch.cuda.empty_cache()
