@@ -40,13 +40,14 @@ class ServerBase(object):
         self.logger = args.logger
         self.load_path = args.load_path
         self.local_steps = args.local_steps
-        self.num_join_clients = int(self.client_num * args.join_ratio)
+        self.active_client = int(self.client_num * args.join_ratio)
         self.net = args.net
         self.save_dir = args.save_dir
         self.sBN = args.sBN
         self.global_m = args.global_momentum
         self.selected_clients = []
         self.uploaded_models = []
+        self.uploaded_weights = []
         self.make_dataset(args)
         self.make_client(args, Client)
         self.make_model()
@@ -59,6 +60,7 @@ class ServerBase(object):
             self.ft = True
 
     def make_optimizer(self, args):
+        self.global_optimizer = get_optimizer(self.global_model, optim_name='SGD', lr=1, momentum=args.global_momentum, weight_decay=0, nesterov=False)
         self.optimizer = get_optimizer(self.global_model, optim_name=args.optim, lr=args.lr, momentum=args.momentum, weight_decay=args.weight_decay)
         self.scheduler = get_cosine_schedule_with_warmup(self.optimizer, num_training_steps=self.global_rounds, num_warmup_steps=0)
         
@@ -94,7 +96,7 @@ class ServerBase(object):
             self.ft_loader = DataLoader(ft_set, batch_size=args.batch_size, shuffle=True)
             
     def select_clients(self):
-        selected_clients = list(np.random.choice(self.clients, self.num_join_clients, replace=False))
+        selected_clients = list(np.random.choice(self.clients, self.active_client, replace=False))
         return selected_clients
     
     def receive_messages(self):
@@ -102,11 +104,41 @@ class ServerBase(object):
         collect models, training samples
         """
         logging.info('Receiving models from clients')
-        self.uploaded_models = {}
+        self.uploaded_models = []
+        self.uploaded_weights = []
         for i, client in enumerate(self.selected_clients):
             id = client.id
-            model = copy.deepcopy(client.model).to(self.device)
-            self.uploaded_models[id] = model
+            model = copy.deepcopy(client.model)
+            self.uploaded_models.append(model)
+            self.uploaded_weights.append(self.local_data_num[id])
+
+    def aggregate(self):
+        logging.debug('Performing aggregation')
+        st = time.time()
+        model_num = len(self.uploaded_models)
+        sample_num = sum(self.uploaded_weights)
+        weights = [w / sample_num for w in self.uploaded_weights]
+
+        if len(self.uploaded_models) > 0:
+            logging.info('--------------start aggregation--------------------')
+            logging.info(f'agg weights: {weights}')
+            with torch.no_grad():
+                shadow_model = copy.deepcopy(self.global_model)
+                for param in shadow_model.parameters():
+                    param.data.zero_()
+                
+                for w, client_model in zip(weights, self.uploaded_models):
+                    for new_param, param in zip(client_model.parameters(), shadow_model.parameters()):
+                        param.data += w * new_param.data.clone()
+                
+                self.global_optimizer.zero_grad()
+                for new_param, param in zip(shadow_model.parameters(), self.global_model.parameters()):
+                    param.grad = (param.data - new_param.data).detach()
+                self.global_optimizer.step()
+        else:
+            logging.info('no uploaded models, skip aggregation')
+
+        logging.info(f'Time cost of aggregation: {(time.time() - st) / 60:.2f} min')  
     
     def train(self, round):
         st = time.time()
@@ -141,9 +173,9 @@ class ServerBase(object):
             st_time = time.time()
             self.selected_clients = self.select_clients()
             lr = self.scheduler.get_last_lr()[0]
-            model_dict = self.global_model.state_dict()
+            
             for i, client in enumerate(self.selected_clients):
-               client.train(round_idx, lr, model_dict)
+               client.train(round_idx, lr, self.global_model)
 
             self.receive_messages()
             self.aggregator.aggregate(self.uploaded_models)
@@ -222,12 +254,14 @@ class ClientBase(object):
         self.net = args.net
         self.load_path = args.load_path
         self.local_steps = args.local_steps
-        self.trainset = trainset
         self.class_num = args.class_num
         self.batch_size = args.c_batch_size
         self.logger = args.logger
         self.exp_tag = args.exp_tag
         self.device = torch.device('cuda:0')
+        self.clip_grad = args.clip_grad
+        self.trainset = trainset
+        self.loader = DataLoader(self.trainset, batch_size=self.batch_size, shuffle=True)
         self.make_model()
         self.make_optimizer(args)
      
@@ -241,12 +275,13 @@ class ClientBase(object):
         self.optimizer = get_optimizer(self.model, optim_name=args.optim, lr=args.lr, momentum=args.momentum, weight_decay=args.weight_decay)
         self.optimizer_dict = self.optimizer.state_dict()
 
-    def set_parameters(self, state_dict):
-        self.model.load_state_dict(state_dict)
+    def set_parameters(self, model):
+        for p, new_p in zip(self.model.parameters(), model.parameters()):
+            p.data = new_p.data.clone()
     
-    def prepare(self, lr, state_dict):
+    def prepare(self, lr, model):
         self.model.to(self.device)
-        self.set_parameters(state_dict)
+        self.set_parameters(model)
         for group in self.optimizer_dict['param_groups']:
             group['lr'] = lr
         self.optimizer.load_state_dict(self.optimizer_dict)
@@ -254,53 +289,16 @@ class ClientBase(object):
     def train(self, round_idx, lr, model_dict):
         pass
 
-
-class Aggregator(object):
-    def __init__(self, client_data_num, global_model, global_m) -> None:
-        self.device = torch.device('cuda:0')
-        self.client_data_num = client_data_num
-        self.global_model = global_model
-        if global_m > 0:
-            self.global_optimizer = get_optimizer(global_model, optim_name='SGD', lr=1, momentum=global_m, weight_decay=0, nesterov=False)
-        else:
-            self.global_optimizer = None
-
-    def aggregate(self, uploaded_models):
-        logging.debug('Performing aggregation')
-        st = time.time()
+    @torch.no_grad()
+    def test(self):
+        self.model.train(False)
+        all_y, all_logits = [], []
+        for x, y in self.loader:   
+            x, y = x.to(self.device), y.to(self.device)
+            logits = self.model(x)
+            all_y.append(y)
+            all_logits.append(logits)
+        y = torch.cat(all_y, dim=0)
+        logits = torch.cat(all_logits, dim=0)
+        return (y == torch.argmax(logits, dim=1)).float().mean().item() * 100
         
-        weight = []
-
-        for i in uploaded_models.keys():
-            weight.append(self.client_data_num[i])
-        weight = [w / sum(weight) for w in weight]
-        models = []
-        for i in uploaded_models.keys():
-            models.append(uploaded_models[i].state_dict())
-        with torch.no_grad():
-            shadow_dict = models[0]
-            for i in range(len(models)):
-                w = weight[i]
-                model = models[i]
-                if i == 0:
-                    for key in shadow_dict.keys():
-                        shadow_dict[key] = model[key] * w
-                else:
-                    for key in shadow_dict.keys():
-                        shadow_dict[key] += model[key] * w
-            if self.global_optimizer is None:
-                self.global_model.load_state_dict(shadow_dict)
-            else: 
-                raise NotImplementedError       
-                # self.global_optimizer.zero_grad()
-                # for k, v in self.global_model.named_parameters():
-                #     if 'weight' in k or 'bias' in k:
-                #         continue
-                #     v.data = shadow_dict[k].data.clone()
-
-                # for name, param in self.global_model.named_parameters():
-                #     param.grad = (param.data - shadow_dict[name].data).detach()
-
-                # self.global_optimizer.step()
-
-        logging.info(f'Time cost of aggregation: {(time.time() - st) / 60:.2f} min')   
