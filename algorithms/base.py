@@ -52,7 +52,6 @@ class ServerBase(object):
         self.make_client(args, Client)
         self.make_model()
         self.make_optimizer(args)
-        self.aggregator = Aggregator(self.local_data_num, self.global_model, self.global_m)
         if self.sBN:
             self.batchnorm_dataset = self.make_norm_dataset()
         self.ft = False
