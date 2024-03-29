@@ -34,13 +34,14 @@ class FcNet(nn.Module):
                 nn.Linear(ip_dim, op_dim, bias=True)
             )
 
-        self.__init_net_weights__()
-
-    def __init_net_weights__(self):
-
-        for m in self.layers:
-            m.weight.data.normal_(0.0, 0.1)
-            m.bias.data.fill_(0.1)
+        for m in self.modules():
+            if isinstance(m, nn.Conv2d):
+                nn.init.kaiming_normal_(m.weight, mode='fan_out', nonlinearity='relu')
+            elif isinstance(m, nn.BatchNorm2d):
+                m.weight.data.fill_(1)
+                m.bias.data.zero_()
+            elif isinstance(m, nn.Linear):
+                m.bias.data.zero_()
 
     def forward(self, x):
 
@@ -59,71 +60,6 @@ class FcNet(nn.Module):
         return x
 
 
-class ConvBlock(nn.Module):
-    def __init__(self):
-        super(ConvBlock, self).__init__()
-        self.conv1 = nn.Conv2d(3, 6, 5)
-        self.pool = nn.MaxPool2d(2, 2)
-        self.conv2 = nn.Conv2d(6, 16, 5)
-
-    def forward(self, x):
-        x = self.pool(F.relu(self.conv1(x)))
-        x = self.pool(F.relu(self.conv2(x)))
-        x = x.view(-1, 16 * 5 * 5)
-        return x
-
-
-class FCBlock(nn.Module):
-    def __init__(self, input_dim, hidden_dims, output_dim=10):
-        super(FCBlock, self).__init__()
-        self.fc1 = nn.Linear(input_dim, hidden_dims[0])
-        self.fc2 = nn.Linear(hidden_dims[0], hidden_dims[1])
-        self.fc3 = nn.Linear(hidden_dims[1], output_dim)
-
-    def forward(self, x):
-        x = F.relu(self.fc1(x))
-        x = F.relu(self.fc2(x))
-        x = self.fc3(x)
-        return x
-
-
-class VGGConvBlocks(nn.Module):
-    '''
-    VGG model
-    '''
-
-    def __init__(self, features, num_classes=10):
-        super(VGGConvBlocks, self).__init__()
-        self.features = features
-        # Initialize weights
-        for m in self.modules():
-            if isinstance(m, nn.Conv2d):
-                n = m.kernel_size[0] * m.kernel_size[1] * m.out_channels
-                m.weight.data.normal_(0, math.sqrt(2. / n))
-                m.bias.data.zero_()
-
-    def forward(self, x):
-        x = self.features(x)
-        x = x.view(x.size(0), -1)
-        return x
-
-
-class FCBlockVGG(nn.Module):
-    def __init__(self, input_dim, hidden_dims, output_dim=10):
-        super(FCBlockVGG, self).__init__()
-        self.fc1 = nn.Linear(input_dim, hidden_dims[0])
-        self.fc2 = nn.Linear(hidden_dims[0], hidden_dims[1])
-        self.fc3 = nn.Linear(hidden_dims[1], output_dim)
-
-    def forward(self, x):
-        x = F.dropout(x)
-        x = F.relu(self.fc1(x))
-        x = F.dropout(x)
-        x = F.relu(self.fc2(x))
-        x = self.fc3(x)
-        return x
-
-
 class SimpleCNN(nn.Module):
     def __init__(self, input_dim, hidden_dims, output_dim=10):
         super(SimpleCNN, self).__init__()
@@ -136,6 +72,15 @@ class SimpleCNN(nn.Module):
         self.fc1 = nn.Linear(input_dim, hidden_dims[0])
         self.fc2 = nn.Linear(hidden_dims[0], hidden_dims[1])
         self.fc3 = nn.Linear(hidden_dims[1], output_dim)
+
+        for m in self.modules():
+            if isinstance(m, nn.Conv2d):
+                nn.init.kaiming_normal_(m.weight, mode='fan_out', nonlinearity='relu')
+            elif isinstance(m, nn.BatchNorm2d):
+                m.weight.data.fill_(1)
+                m.bias.data.zero_()
+            elif isinstance(m, nn.Linear):
+                m.bias.data.zero_()
 
     def forward(self, x):
         x = self.pool(F.relu(self.conv1(x)))
@@ -174,6 +119,15 @@ class SimpleCNNMNIST(nn.Module):
         self.fc2 = nn.Linear(hidden_dims[0], hidden_dims[1])
         self.fc3 = nn.Linear(hidden_dims[1], output_dim)
 
+        for m in self.modules():
+            if isinstance(m, nn.Conv2d):
+                nn.init.kaiming_normal_(m.weight, mode='fan_out', nonlinearity='relu')
+            elif isinstance(m, nn.BatchNorm2d):
+                m.weight.data.fill_(1)
+                m.bias.data.zero_()
+            elif isinstance(m, nn.Linear):
+                m.bias.data.zero_()
+
     def forward(self, x):
         x = self.pool(F.relu(self.conv1(x)))
         x = self.pool(F.relu(self.conv2(x)))
@@ -206,6 +160,16 @@ class SimpleCNNContainer(nn.Module):
         self.fc2 = nn.Linear(hidden_dims[0], hidden_dims[1])
         self.fc3 = nn.Linear(hidden_dims[1], output_dim)
 
+        for m in self.modules():
+            if isinstance(m, nn.Conv2d):
+                nn.init.kaiming_normal_(m.weight, mode='fan_out', nonlinearity='relu')
+            elif isinstance(m, nn.BatchNorm2d):
+                m.weight.data.fill_(1)
+                m.bias.data.zero_()
+            elif isinstance(m, nn.Linear):
+                m.bias.data.zero_()
+        
+
     def forward(self, x):
         x = self.pool(F.relu(self.conv1(x)))
         x = self.pool(F.relu(self.conv2(x)))
@@ -224,7 +188,15 @@ class LeNet(nn.Module):
         self.conv2 = nn.Conv2d(20, 50, 5, 1)
         self.fc1 = nn.Linear(4 * 4 * 50, 500)
         self.fc2 = nn.Linear(500, 10)
-        self.ceriation = nn.CrossEntropyLoss()
+
+        for m in self.modules():
+            if isinstance(m, nn.Conv2d):
+                nn.init.kaiming_normal_(m.weight, mode='fan_out', nonlinearity='relu')
+            elif isinstance(m, nn.BatchNorm2d):
+                m.weight.data.fill_(1)
+                m.bias.data.zero_()
+            elif isinstance(m, nn.Linear):
+                m.bias.data.zero_()
 
     def forward(self, x):
         x = self.conv1(x)
@@ -234,28 +206,6 @@ class LeNet(nn.Module):
         x = F.max_pool2d(x, 2, 2)
         x = F.relu(x)
         x = x.view(-1, 4 * 4 * 50)
-        x = self.fc1(x)
-        x = self.fc2(x)
-        return x
-
-
-class LeNetContainer(nn.Module):
-    def __init__(self, num_filters, kernel_size, input_dim, hidden_dims, output_dim=10):
-        super(LeNetContainer, self).__init__()
-        self.conv1 = nn.Conv2d(1, num_filters[0], kernel_size, 1)
-        self.conv2 = nn.Conv2d(num_filters[0], num_filters[1], kernel_size, 1)
-
-        self.fc1 = nn.Linear(input_dim, hidden_dims[0])
-        self.fc2 = nn.Linear(hidden_dims[0], output_dim)
-
-    def forward(self, x):
-        x = self.conv1(x)
-        x = F.max_pool2d(x, 2, 2)
-        x = F.relu(x)
-        x = self.conv2(x)
-        x = F.max_pool2d(x, 2, 2)
-        x = F.relu(x)
-        x = x.view(-1, x.size()[1] * x.size()[2] * x.size()[3])
         x = self.fc1(x)
         x = self.fc2(x)
         return x
@@ -301,6 +251,16 @@ class ModerateCNN(nn.Module):
             nn.Dropout(p=0.1),
             nn.Linear(512, num_classes)
         )
+
+        for m in self.modules():
+            if isinstance(m, nn.Conv2d):
+                nn.init.kaiming_normal_(m.weight, mode='fan_out', nonlinearity='relu')
+            elif isinstance(m, nn.BatchNorm2d):
+                m.weight.data.fill_(1)
+                m.bias.data.zero_()
+            elif isinstance(m, nn.Linear):
+                m.bias.data.zero_()
+
     def forward(self, x):
         x = self.conv_layer(x)
         x = x.view(x.size(0), -1)
@@ -348,6 +308,15 @@ class ModerateCNNCeleba(nn.Module):
             nn.Linear(512, 2)
         )
 
+        for m in self.modules():
+            if isinstance(m, nn.Conv2d):
+                nn.init.kaiming_normal_(m.weight, mode='fan_out', nonlinearity='relu')
+            elif isinstance(m, nn.BatchNorm2d):
+                m.weight.data.fill_(1)
+                m.bias.data.zero_()
+            elif isinstance(m, nn.Linear):
+                m.bias.data.zero_()
+
     def forward(self, x):
         x = self.conv_layer(x)
         # x = x.view(x.size(0), -1)
@@ -392,6 +361,15 @@ class ModerateCNNMNIST(nn.Module):
             nn.Dropout(p=0.1),
             nn.Linear(512, output_dim)
         )
+
+        for m in self.modules():
+            if isinstance(m, nn.Conv2d):
+                nn.init.kaiming_normal_(m.weight, mode='fan_out', nonlinearity='relu')
+            elif isinstance(m, nn.BatchNorm2d):
+                m.weight.data.fill_(1)
+                m.bias.data.zero_()
+            elif isinstance(m, nn.Linear):
+                m.bias.data.zero_()
 
     def forward(self, x):
         x = self.conv_layer(x)
@@ -438,6 +416,15 @@ class ModerateCNNContainer(nn.Module):
             nn.Dropout(p=0.1),
             nn.Linear(hidden_dims[1], output_dim)
         )
+
+        for m in self.modules():
+            if isinstance(m, nn.Conv2d):
+                nn.init.kaiming_normal_(m.weight, mode='fan_out', nonlinearity='relu')
+            elif isinstance(m, nn.BatchNorm2d):
+                m.weight.data.fill_(1)
+                m.bias.data.zero_()
+            elif isinstance(m, nn.Linear):
+                m.bias.data.zero_()
 
     def forward(self, x):
         x = self.conv_layer(x)
