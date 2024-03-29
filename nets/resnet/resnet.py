@@ -97,6 +97,15 @@ class ResNet(nn.Module):
         inplanes = [inplane * block.expansion for inplane in inplanes]
         logging.debug(inplanes)
 
+        for m in self.modules():
+            if isinstance(m, nn.Conv2d):
+                nn.init.kaiming_normal_(m.weight, mode='fan_out', nonlinearity='relu')
+            elif isinstance(m, nn.BatchNorm2d):
+                m.weight.data.fill_(1)
+                m.bias.data.zero_()
+            elif isinstance(m, nn.Linear):
+                m.bias.data.zero_()
+
     def _make_layer(self, block, planes, num_blocks, stride):
 
         strides = [stride] + [1] * (num_blocks - 1)
