@@ -60,6 +60,7 @@ class FetchData(object):
 
 
     def load_data(self):
+        self.other_params['ft_idx'] = None
         if self.client_number > 1:
             train_ds, test_ds = self.federated_split() 
             self.other_params["local_counts"] = self.local_counts
@@ -68,6 +69,7 @@ class FetchData(object):
         train_ds, test_ds = self.fetch_dataset()
         self.other_params["local_counts"] = None
         self.other_params["client_idx"] = None
+        
         return train_ds, test_ds, len(train_ds), self.class_num, self.other_params
 
     def fetch_dataset(self):
@@ -149,7 +151,6 @@ class FetchData(object):
     def federated_split(self):
         logging.debug("federated_split")
         train_ds, test_ds = self.fetch_dataset()
-        self.other_params['ft_idx'] = None
         if self.ft_data > 0:
             targets = np.array(train_ds.targets)
             idx = []
