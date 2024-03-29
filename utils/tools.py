@@ -156,3 +156,20 @@ def plot_tsne(model, dataloader, device, use_prototype=False):
     plt.scatter(X_tsne[:, 0], X_tsne[:, 1], c=y.cpu().numpy(), s=10, cmap='Set1_r')
     plt.colorbar(ticks=range(3))
     plt.savefig(f'{use_prototype}_tsne.png')
+
+
+def get_params(model, detach=True) -> torch.Tensor:
+    params = None
+    for p in model.parameters():
+        if p.requires_grad:
+            if detach:
+                if params is None:
+                    params = p.data.detach().view(-1)
+                else:
+                    params = torch.cat((params, p.data.detach().view(-1)), dim=0)
+            else:
+                if params is None:
+                    params = p.data.view(-1)
+                else:
+                    params = torch.cat((params, p.data.view(-1)), dim=0)
+    return params # type: ignore
