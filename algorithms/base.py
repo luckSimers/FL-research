@@ -8,22 +8,6 @@ from torch.utils.data import DataLoader
 from torch.nn.utils.clip_grad import clip_grad_norm_
 from datasets import Subset4FL
 
-shape = {
-    'CIFAR10': [3, 32, 32],
-    'CIFAR100': [3, 32, 32],
-    'MNIST': [1, 28, 28],
-    'FashionMNIST': [1, 28, 28],
-    'SVHN': [3, 32, 32],
-    'STL10': [3, 96, 96],
-}
-classes = {
-    'CIFAR10': 10,
-    'CIFAR100': 100,
-    'MNIST': 10,
-    'FashionMNIST': 10,
-    'SVHN': 10,
-    'STL10': 10,
-}
 
 class ServerBase(object):
     def __init__(self, args, Client) -> None:
@@ -59,7 +43,6 @@ class ServerBase(object):
             self.ft = True
 
     def make_optimizer(self, args):
-        self.global_optimizer = get_optimizer(self.global_model, optim_name='SGD', lr=1, momentum=args.global_momentum, weight_decay=0, nesterov=False)
         self.optimizer = get_optimizer(self.global_model, optim_name=args.optim, lr=args.lr, momentum=args.momentum, weight_decay=args.weight_decay)
         self.scheduler = get_cosine_schedule_with_warmup(self.optimizer, num_training_steps=self.global_rounds, num_warmup_steps=0)
         
@@ -107,10 +90,11 @@ class ServerBase(object):
         self.uploaded_weights = []
         for i, client in enumerate(self.selected_clients):
             id = client.id
-            model = copy.deepcopy(client.model)
+            model = copy.deepcopy(client.model).to(self.device).state_dict()
             self.uploaded_models.append(model)
             self.uploaded_weights.append(self.local_data_num[id])
-
+    
+    @torch.no_grad()
     def aggregate(self):
         logging.debug('Performing aggregation')
         st = time.time()
@@ -121,19 +105,15 @@ class ServerBase(object):
         if len(self.uploaded_models) > 0:
             logging.info('--------------start aggregation--------------------')
             logging.info(f'agg weights: {weights}')
-            with torch.no_grad():
-                shadow_model = copy.deepcopy(self.global_model)
-                for param in shadow_model.parameters():
-                    param.data.zero_()
-                
-                for w, client_model in zip(weights, self.uploaded_models):
-                    for new_param, param in zip(client_model.parameters(), shadow_model.parameters()):
-                        param.data += w * new_param.data.clone()
-                
-                self.global_optimizer.zero_grad()
-                for new_param, param in zip(shadow_model.parameters(), self.global_model.parameters()):
-                    param.grad = (param.data - new_param.data).detach()
-                self.global_optimizer.step()
+            new_dict = self.global_model.state_dict()
+            for i in range(len(weights)):
+                w = weights[i]
+                if i == 0:
+                    for v in new_dict.values():
+                        v *= w
+                else:
+                    for v, lv in zip(new_dict.values(), self.uploaded_models[i].values()):
+                        v += w * lv
         else:
             logging.info('no uploaded models, skip aggregation')
 

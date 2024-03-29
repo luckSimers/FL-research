@@ -31,6 +31,7 @@ class Client(ClientBase):
         self.prepare(lr, state_dict)
         
         self.model.train(True)
+        loss_meter = AverageMeter()
         for step in range(self.local_steps):
             for x, y in self.loader:
                 x, y = x.to(self.device), y.to(self.device)
@@ -42,6 +43,7 @@ class Client(ClientBase):
                 loss.backward()
                 clip_grad_norm_(self.model.parameters(), self.clip_grad)
                 self.optimizer.step()
+                loss_meter.update(loss.item(), y.size(0))
                 
-        logging.info(f'C{self.id:<2d}>> training cost {(time.time() - st)/60:.2f} min')
+        logging.info(f'C{self.id:<2d}>> avg loss {loss_meter.avg:.2f}, training cost {(time.time() - st)/60:.2f} min')
         self.model.to('cpu')
