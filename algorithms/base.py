@@ -28,7 +28,6 @@ class ServerBase(object):
         self.net = args.net
         self.save_dir = args.save_dir
         self.sBN = args.sBN
-        self.global_m = args.global_momentum
         self.selected_clients = []
         self.uploaded_models = []
         self.uploaded_weights = []

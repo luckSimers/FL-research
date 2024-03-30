@@ -77,7 +77,7 @@ def get_config():
     '''
     Backbone Net Configurations
     '''
-    parser.add_argument('--net', type=str, default='resnet18')
+    parser.add_argument('--net', type=str, default='ModerateCNN')
 
     '''
     Algorithms Configurations
@@ -95,8 +95,7 @@ def get_config():
 
     ## Federated Learning setting configurations
     parser.add_argument('--global_rounds', type=int, default=100)
-    parser.add_argument('--global_momentum', type=float, default=0., help='global momentum')
-    parser.add_argument('--local_steps', type=int, default=10, help='number of local steps')
+    parser.add_argument('--local_steps', type=int, default=5, help='number of local steps')
     parser.add_argument('--client_num', type=int, default=10)
     parser.add_argument('--join_ratio', type=float, default=1, help='ratio of clients to join in each round')
     parser.add_argument('--split_type', type=str, default='iid', help='type of heterogeneity')
@@ -124,7 +123,7 @@ def get_config():
     if args.algorithm == 'centralized':
         args.exp_tag += f'_{args.algorithm}'
     else:
-        args.exp_tag += f'_{args.algorithm}_{args.split_type}_{args.client_num}'
+        args.exp_tag += f'_{args.split_type}_{args.client_num}_{args.algorithm}_ft-{args.ft_data_per_cls}'
 
     for argument in name2algo[args.algorithm].get_argument():
         name = argument.name[2:]
