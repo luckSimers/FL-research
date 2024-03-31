@@ -169,9 +169,9 @@ class FetchData(object):
 
         self.local_data_num = [] 
         # self.local_train_loader = []
-        for client_index in range(self.client_number):
+        for id in range(self.client_number):
             # train_ds= self.load_sub_data(client_index, train_ds, test_ds)
-            self.local_data_num.append(len(self.client_idx[client_index]))
+            self.local_data_num.append(len(self.client_idx[id]))
             # train_dl = data.DataLoader(dataset=train_ds, batch_size=self.batch_size, shuffle=True, 
             #                     drop_last=True, num_workers=self.num_workers)
             # self.local_train_loader.append(train_dl)
@@ -208,7 +208,7 @@ class FetchData(object):
                     idx_k = np.where(y_train_np == k)[0]
                     np.random.shuffle(idx_k)
                     proportions = np.random.dirichlet(np.repeat(alpha, self.client_number))
-                    proportions = np.array([p * (len(idx_j) < N / self.client_number) for p, idx_j in zip(proportions, idx_batch)])
+                    proportions = np.array([p * (len(idx_j) < train_data_num / self.client_number) for p, idx_j in zip(proportions, idx_batch)])
                     proportions = proportions / proportions.sum()
                     proportions = (np.cumsum(proportions) * len(idx_k)).astype(int)[:-1]
                     idx_batch = [idx_j + idx.tolist() for idx_j, idx in zip(idx_batch, np.split(idx_k, proportions))]
