@@ -108,10 +108,14 @@ class ServerBase(object):
             for i in range(len(weights)):
                 w = weights[i]
                 if i == 0:
-                    for v in new_dict.values():
+                    for k, v in new_dict.items():
+                        if k.endswith('num_batches_tracked'):
+                            continue
                         v *= w
                 else:
-                    for v, lv in zip(new_dict.values(), self.uploaded_models[i].values()):
+                    for (k, v), lv in zip(new_dict.items(), self.uploaded_models[i].values()):
+                        if k.endswith('num_batches_tracked'):
+                            continue
                         v += w * lv
         else:
             logging.info('no uploaded models, skip aggregation')
