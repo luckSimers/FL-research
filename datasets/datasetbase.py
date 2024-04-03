@@ -5,6 +5,7 @@ from PIL import Image
 import torchvision
 from torchvision import transforms
 from torch.utils.data import Dataset
+from ..utils import create_ft_set, visualize
 
 
 class Subset4FL(Dataset):
@@ -16,10 +17,16 @@ class Subset4FL(Dataset):
             dataidxs=None,
             transform=None,
             target_transform=None,
+            freq=False,
+            del_num=0,
+            random=False,
     ):
         self.data_name = data_name
         self.dataidxs = dataidxs
         self.dataset = dataset
+        self.freq = freq
+        self.del_num = del_num
+        self.random = random
         if transform is not None:
             self.transform = transform
         else:
@@ -36,7 +43,10 @@ class Subset4FL(Dataset):
             return self.dataset.data, self.dataset.targets
         data = self.dataset.data[self.dataidxs]
         targets = np.array(self.dataset.targets)[self.dataidxs]
-
+        if self.freq:
+            compressed_data = create_ft_set(data, self.del_num, self.random)
+            visualize(data, compressed_data, self.data_name)
+            return compressed_data, targets
         return data, targets
 
 
@@ -55,7 +65,7 @@ class Subset4FL(Dataset):
             else:
                 img = Image.fromarray(img)
         
-        if self.transform is not None:
+        if self.transform is not None and not self.freq:
             img = self.transform(img)
 
         if self.target_transform is not None:
