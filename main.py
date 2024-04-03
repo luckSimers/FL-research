@@ -85,6 +85,11 @@ def get_config():
     ## core algorithm setting
     parser.add_argument('--algorithm', type=str, default='fedavg', help='')
     parser.add_argument('--ft_data_per_cls', type=int, default=0, help='data per class for server finetuning')
+    parser.add_argument('--compress_freq', type=bool, default=False, help='compress fine-tune set in frequency domain')
+    parser.add_argument('--del_freq_chs', type=int, default=0, help='number of high-frequency channels to be deleted')
+    parser.add_argument('--randomize', type=bool, default=False, help='whether randomize left high-frequency channels')
+
+    
     '''
     Data Configurations
     '''
