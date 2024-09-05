@@ -1,17 +1,21 @@
-import random
-import numpy as np
-import torch
 import os
+import time
+import torch
+import random
 import logging
+import numpy as np
+import torch.nn as nn
+import torch.cuda as cuda
 from torch.utils.data import DataLoader
+
 
 
 def set_random_seed(seed):
     random.seed(seed)
     np.random.seed(seed)
     torch.manual_seed(seed)
-    torch.cuda.manual_seed(seed)
-    torch.cuda.manual_seed_all(seed)
+    cuda.manual_seed(seed)
+    cuda.manual_seed_all(seed)
 
 class AverageMeter(object):
     """Computes and stores the average and current value"""
@@ -57,45 +61,17 @@ def get_logger(name, save_path=None, level='INFO'):
     create logger function
     """
     logger = logging.getLogger(name)
-    logging.basicConfig(format='[%(asctime)s %(levelname)s] %(message)s', level=getattr(logging, level))
+    logging.basicConfig(format='%(filename)s-[%(lineno)d]: %(message)s', level=getattr(logging, level.upper()))
 
     if not save_path is None:
         os.makedirs(save_path, exist_ok=True)
-        log_format = logging.Formatter('[%(asctime)s %(levelname)s] %(message)s')
-        fileHandler = logging.FileHandler(os.path.join(save_path, 'log.txt'))
+        log_format = logging.Formatter('%(filename)s-[%(lineno)d]: %(message)s')
+        fileHandler = logging.FileHandler(os.path.join(save_path, f'log_{time.asctime().replace(" ", "_")}.txt'))
         fileHandler.setFormatter(log_format)
         logger.addHandler(fileHandler)
 
     return logger
 
-
-def logging_config(args):
-    # customize the log format
-    while logging.getLogger().handlers:
-        logging.getLogger().handlers.clear()
-    console = logging.StreamHandler()
-    args.level = args.level.upper()
-    if args.level == 'INFO':
-        console.setLevel(logging.INFO)
-    elif args.level == 'DEBUG':
-        console.setLevel(logging.DEBUG)
-    else:
-        raise NotImplementedError
-    formatter = logging.Formatter(
-        '%(asctime)s: %(filename)s-[line:%(lineno)d] *%(levelname)s* %(message)s')
-    console.setFormatter(formatter)
-    # Create an instance
-    logging.getLogger().addHandler(console)
-    # logging.getLogger().info("test")
-    logging.basicConfig()
-    logger = logging.getLogger()
-    if args.level == 'INFO':
-        logger.setLevel(logging.INFO)
-    elif args.level == 'DEBUG':
-        logger.setLevel(logging.DEBUG)
-    else:
-        raise NotImplementedError
-    logging.info(args)
 
 
 def make_batchnorm(m, momentum, track_running_stats):
@@ -116,8 +92,8 @@ def make_batchnorm_stats(dataset, test_model, device):
         test_model.apply(lambda m: make_batchnorm(m, momentum=None, track_running_stats=True))
         data_loader = DataLoader(dataset, batch_size=250)
         test_model.train(True)
-        for i, data in enumerate(data_loader):
-            x = data['x'].to(device)
+        for x, y in data_loader:
+            x = x.to(device)
             test_model(x)
 
 
@@ -173,3 +149,6 @@ def get_params(model, detach=True) -> torch.Tensor:
                 else:
                     params = torch.cat((params, p.data.view(-1)), dim=0)
     return params # type: ignore
+
+
+

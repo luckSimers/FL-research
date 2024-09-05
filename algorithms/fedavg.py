@@ -1,7 +1,6 @@
 # This file contains the implementation of FedAvg algorithm
 import copy
 import time
-import logging
 import torch.nn as nn
 import torch.optim as optim
 from torch.utils.data import DataLoader
@@ -14,11 +13,6 @@ class FedAvg(ServerBase):
     def __init__(self, args) -> None:
         super(FedAvg, self).__init__(args, Client)
     
-    @staticmethod
-    def get_argument():
-        return [
-            
-        ]
 
 class Client(ClientBase):
     def __init__(self, args, id, trainset) -> None:
@@ -45,5 +39,5 @@ class Client(ClientBase):
                 self.optimizer.step()
                 loss_meter.update(loss.item(), y.size(0))
                 
-        logging.info(f'C{self.id:<2d}>> avg loss {loss_meter.avg:.2f}, training cost {(time.time() - st)/60:.2f} min')
+        self.printer.info(f'C{self.id:<2d}>> avg loss {loss_meter.avg:.2f}, training cost {(time.time() - st)/60:.2f} min')
         self.model.to('cpu')

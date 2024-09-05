@@ -144,7 +144,7 @@ def get_optimizer(net, optim_name='SGD', lr=0.1, momentum=0.9, weight_decay=0, l
         optimizer = SGD(per_param_args, lr=lr, momentum=momentum, weight_decay=weight_decay,
                                     nesterov=nesterov)
     elif optim_name == 'AdamW':
-        optimizer = AdamW(per_param_args, lr=lr, weight_decay=weight_decay)
+        optimizer = AdamW(per_param_args, lr=lr, betas=(0.9, 0.999), weight_decay=weight_decay)
 
     return optimizer
 

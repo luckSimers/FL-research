@@ -181,13 +181,6 @@ class FetchData(object):
     def partition_data(self, y_train_np, train_data_num):
 
         logging.info("partition_type = " + (self.partition_type))
-        load_path = os.path.join(self.datadir, self.dataset, "partition", self.partition_type + "_" + str(self.client_number) + '.npy')
-        if os.path.exists(load_path):
-            logging.debug("directly loading existing partition from: " + load_path)
-            client_idx = np.load(load_path, allow_pickle=True)
-            local_counts = record_data_stats(y_train_np, client_idx)
-            return client_idx, local_counts
-        
 
         if self.partition_type == "iid":
             logging.debug('IID partitioning')
@@ -244,11 +237,8 @@ class FetchData(object):
 
         else:
             raise NotImplementedError
-        print(client_idx)
+
         client_idx = [client_idx[i] for i in range(self.client_number)]
-        os.makedirs(os.path.dirname(load_path), exist_ok=True)
-        np.save(load_path, client_idx)
-        logging.debug("partition saved to: " + load_path)
         local_counts = record_data_stats(y_train_np, client_idx)
 
         return client_idx, local_counts

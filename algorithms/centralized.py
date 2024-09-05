@@ -22,7 +22,7 @@ class Centralized(object):
         self.save_dir = args.save_dir
         self.make_dataset(args)
         args.class_num = self.class_num
-        self.train_loader = DataLoader(self.trainset, batch_size=args.batch_size, shuffle=True)
+        self.train_loader = DataLoader(self.trainset, batch_size=args.bs, shuffle=True)
         self.test_loader = DataLoader(self.testset, batch_size=args.eval_bs, shuffle=False)
         self.make_model()
         self.optimizer = get_optimizer(self.model, optim_name=args.optim, lr=args.lr, momentum=args.momentum, weight_decay=args.weight_decay)
@@ -55,6 +55,15 @@ class Centralized(object):
         data_info = fetch_fl_dataset(args.dataset, args.data_dir, client_num=1)
         self.trainset, self.testset = data_info['train_ds'], data_info['test_ds']
         self.class_num = data_info['class_num']
+
+        if args.compress_freq:
+            self.trainset = Subset4FL(
+                self.dataset, self.trainset, None,
+                self.testset.transform,
+                compress_freq=args.compress_freq,
+                randomize=args.randomize,
+                del_num=args.del_freq_chs
+            )
         
     def run(self):
         """

@@ -3,7 +3,6 @@
 # FedProx: proximal term is added to punish updates that are far away from global model
 import copy
 import time
-import logging
 import torch.nn as nn
 import torch.optim as optim
 from torch.nn.utils.clip_grad import clip_grad_norm_
@@ -15,13 +14,7 @@ from algorithms import ClientBase, ServerBase
 class FedProx(ServerBase):
     def __init__(self, args) -> None:
         super(FedProx, self).__init__(args, Client)
-    
-    @staticmethod
-    def get_argument():
-        return [
-            Special_Argument('--mu', type=float, default=0.1, help='weight of proximal term'),
 
-        ]
 
 class Client(ClientBase):
     def __init__(self, args, id, trainset) -> None:
@@ -53,4 +46,4 @@ class Client(ClientBase):
                 self.optimizer.step()
                 loss_meter.update(loss.item(), y.size(0))
         self.model.to('cpu')
-        logging.info(f'C{self.id:<2d}>> avg loss {loss_meter.avg:.2f}, training cost {(time.time() - st)/60:.2f} min')
+        self.printer.info(f'C{self.id:<2d}>> avg loss {loss_meter.avg:.2f}, training cost {(time.time() - st)/60:.2f} min')

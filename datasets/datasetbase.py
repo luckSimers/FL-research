@@ -2,10 +2,10 @@ import copy
 import logging
 import numpy as np 
 from PIL import Image
-import torchvision
+import torch
 from torchvision import transforms
 from torch.utils.data import Dataset
-from ..utils import create_ft_set, visualize
+from utils.dct import create_ft_set, visualize
 
 
 class Subset4FL(Dataset):
@@ -17,16 +17,16 @@ class Subset4FL(Dataset):
             dataidxs=None,
             transform=None,
             target_transform=None,
-            freq=False,
+            compress_freq=False,
             del_num=0,
-            random=False,
+            randomize=False,
     ):
         self.data_name = data_name
         self.dataidxs = dataidxs
         self.dataset = dataset
-        self.freq = freq
+        self.compress_freq = compress_freq
         self.del_num = del_num
-        self.random = random
+        self.randomize = randomize
         if transform is not None:
             self.transform = transform
         else:
@@ -40,13 +40,22 @@ class Subset4FL(Dataset):
     def __build_truncated_dataset__(self):
        
         if self.dataidxs is None:
-            return self.dataset.data, self.dataset.targets
-        data = self.dataset.data[self.dataidxs]
-        targets = np.array(self.dataset.targets)[self.dataidxs]
-        if self.freq:
-            compressed_data = create_ft_set(data, self.del_num, self.random)
-            visualize(data, compressed_data, self.data_name)
-            return compressed_data, targets
+            data, targets = self.dataset.data, self.dataset.targets
+        else:
+            data = self.dataset.data[self.dataidxs]
+        # type of data: <class 'numpy.ndarray'>, type of data[0]: <class 'numpy.ndarray'>
+            targets = np.array(self.dataset.targets)[self.dataidxs]
+        if self.compress_freq:
+            t = transforms.ToTensor()
+            data = torch.stack(
+                [t(img) for img in data],
+                dim=0
+            )
+            compressed_data = create_ft_set(data, self.del_num, self.randomize)
+            visualize( self.data_name, data, compressed_data,)
+            compressed_data = compressed_data.unbind(dim=0)
+            t = transforms.ToPILImage()
+            data = [t(img) for img in compressed_data]
         return data, targets
 
 
@@ -65,7 +74,7 @@ class Subset4FL(Dataset):
             else:
                 img = Image.fromarray(img)
         
-        if self.transform is not None and not self.freq:
+        if self.transform is not None:
             img = self.transform(img)
 
         if self.target_transform is not None:

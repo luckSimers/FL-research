@@ -8,3 +8,4 @@ from .bert import bert_base_cased, bert_base_uncased
 from .wave2vecv2 import wave2vecv2_base
 from .hubert import hubert_base
 from .simple_cnn import ModerateCNN
+from .fl_vae import VAE

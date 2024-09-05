@@ -16,9 +16,6 @@ def dct_transform(x, chs_remove=None, chs_pad=False, del_num=0,
     # assert x is a (B, 3, H, W) RGB image
     assert x.shape[1] == 3
 
-    # convert the spatial image's range into [0, 1], recommended by TorchJPEG
-    # x = x * 0.5 + 0.5
-
     # up-sample
     x = F.interpolate(x, scale_factor=ratio, mode='bilinear', align_corners=True)
 
@@ -89,42 +86,52 @@ def create_ft_set(x, del_num = 0, random=True):
     """
     # low-frequency channels to prune
     chs_prune = [0, 1, 2, 3, 8, 9, 10, 16, 17, 24]
-    x_freq = dct_transform(x, chs_remove=chs_prune, chs_pad=True, del_num=del_num)
-    b, c, h, w = x_freq.shape
-    if random:
-        perm = np.random.permutation(c)
-        x_freq = x_freq[:,perm]
+    batches = x.shape[0] // 128
+    x_list = []
+    for batch in range(batches):
+        x_freq = dct_transform(x[128 * batch: 128 * (batch + 1)], chs_remove=chs_prune, chs_pad=True, del_num=del_num)
+        b, c, h, w = x_freq.shape
+        if random:
+            perm = np.random.permutation(c)
+            x_freq = x_freq[:,perm]
+        # turn back to spatial domain
+        x_list.append(idct_transform(x_freq))
     
-    # turn back to spatial domain
-    x = idct_transform(x_freq)
-
-
+    if x.shape[0] % 128 != 0:
+        x_freq = dct_transform(x[128 * batches:], chs_remove=chs_prune, chs_pad=True, del_num=del_num)
+        b, c, h, w = x_freq.shape
+        if random:
+            perm = np.random.permutation(c)
+            x_freq = x_freq[:,perm]
+        x_list.append(idct_transform(x_freq))
+    x = torch.cat(x_list, dim=0)
     return x
 
 
-def visualize(dataset, x, px):
+def visualize(dataname, x, px):
     import torchvision.transforms as t
     import os
     num = x.shape[0]
-    batch = num // 5
-    for i in range(batch):
-        org, aft = x[i*5: (i+1)*5], px[i*5: (i+1)*5]
-        org = F.interpolate(org, scale_factor=3, mode='bilinear', align_corners=True)
-        aft = F.interpolate(aft, scale_factor=3, mode='bilinear', align_corners=True)
-        fig, axes = plt.subplots(2, 5, tight_layout=True)
-        # fig.subplots_adjust(hspace=0, wspace=0)
-        
-        for c in range(5):
-            ax = axes[0][c]
-            ax.imshow(t.ToPILImage()(org[c]))
-            ax.axis('off')
-        
-        for c in range(5):
-            ax = axes[1][c]
-            ax.axis('off')
-            ax.imshow(t.ToPILImage()(aft[c]))
-        os.makedirs('./data', exist_ok=True)
-        plt.savefig(f'./data/{dataset}_{i}.pdf')
+    perm = np.random.permutation(num)
+    x = x[perm,]
+    px = px[perm,]
+    org, aft = x[:10], px[:10]
+    org = F.interpolate(org, scale_factor=3, mode='bilinear', align_corners=True)
+    aft = F.interpolate(aft, scale_factor=3, mode='bilinear', align_corners=True)
+    fig, axes = plt.subplots(2, 10, tight_layout=True)
+    # fig.subplots_adjust(hspace=0, wspace=0)
+    
+    for c in range(10):
+        ax = axes[0][c]
+        ax.imshow(t.ToPILImage()(org[c]))
+        ax.axis('off')
+    
+    for c in range(10):
+        ax = axes[1][c]
+        ax.axis('off')
+        ax.imshow(t.ToPILImage()(aft[c]))
+    os.makedirs('./data', exist_ok=True)
+    plt.savefig(f'./data/{dataname}.pdf')
 
 
 
