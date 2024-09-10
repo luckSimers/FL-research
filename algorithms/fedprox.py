@@ -4,12 +4,9 @@
 import copy
 import time
 import torch.nn as nn
-import torch.optim as optim
 from torch.nn.utils.clip_grad import clip_grad_norm_
-from torch.utils.data import DataLoader
-from utils import *
 from algorithms import ClientBase, ServerBase
-
+from utils import *
 
 class FedProx(ServerBase):
     def __init__(self, args) -> None:
@@ -31,6 +28,7 @@ class Client(ClientBase):
         self.model.train(True)
         loss_meter = AverageMeter()
         for step in range(self.local_steps):
+            loss_meter.reset()
             for x, y in self.loader:
                 x, y = x.to(self.device), y.to(self.device)
                 if len(y) < 2:
@@ -45,5 +43,6 @@ class Client(ClientBase):
                     clip_grad_norm_(self.model.parameters(), self.clip_grad)
                 self.optimizer.step()
                 loss_meter.update(loss.item(), y.size(0))
+            self.printer.info(f'C{self.id:<2d}:{step}/{self.local_steps}>> avg loss {loss_meter.avg:.2f}')
         self.model.to('cpu')
-        self.printer.info(f'C{self.id:<2d}>> avg loss {loss_meter.avg:.2f}, training cost {(time.time() - st)/60:.2f} min')
+        

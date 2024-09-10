@@ -1,10 +1,10 @@
-import logging
 import time
-from torch.utils.data import DataLoader
-from utils import *
-from sklearn.metrics import confusion_matrix
+import logging
 import torch.nn as nn
+from torch.utils.data import DataLoader
+from sklearn.metrics import confusion_matrix
 from torch.nn.utils.clip_grad import clip_grad_norm_
+from utils import *
 
 class Centralized(object):
 
@@ -21,7 +21,7 @@ class Centralized(object):
         self.net = args.net
         self.save_dir = args.save_dir
         self.make_dataset(args)
-        args.class_num = self.class_num
+        self.num_classes = args.num_classes
         self.train_loader = DataLoader(self.trainset, batch_size=args.bs, shuffle=True)
         self.test_loader = DataLoader(self.testset, batch_size=args.eval_bs, shuffle=False)
         self.make_model()
@@ -48,13 +48,12 @@ class Centralized(object):
     def make_model(self):
         logging.debug('Building models')
         net_builder = get_net_builder(self.net)
-        self.model = net_builder(self.class_num).to(self.device)
+        self.model = net_builder(self.num_classes).to(self.device)
         
     def make_dataset(self, args):
         logging.debug('Loading and spliting dataset')
         data_info = fetch_fl_dataset(args.dataset, args.data_dir, client_num=1)
         self.trainset, self.testset = data_info['train_ds'], data_info['test_ds']
-        self.class_num = data_info['class_num']
 
         if args.compress_freq:
             self.trainset = Subset4FL(
@@ -100,7 +99,7 @@ class Centralized(object):
         logits = torch.cat(all_logits, dim=0)
         test_acc = (y == torch.argmax(logits, dim=1)).float().mean().item() * 100
 
-        cm = confusion_matrix(y.cpu().numpy(), torch.argmax(logits, dim=1).cpu().numpy(), labels=range(self.class_num))
+        cm = confusion_matrix(y.cpu().numpy(), torch.argmax(logits, dim=1).cpu().numpy(), labels=range(self.num_classes))
         class_per_acc = cm.diagonal() / (cm.sum(axis=0) + 1e-8)
         logs = '------ precision: '
         for i, acc in enumerate(class_per_acc):
