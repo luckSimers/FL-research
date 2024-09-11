@@ -20,13 +20,14 @@ data_stats = {'MNIST': ((0.1307,), (0.3081,)), 'FashionMNIST': ((0.2860,), (0.35
 
 
 def record_data_stats(y_train, client_dataidx):
-    client_train_cls_counts_dict = {}
-
+    client_train_cls_counts_dict = []
+    unq = np.unique(y_train)
+    logs = '-----------Local Data Distribution-----------\n'
     for client_idx, dataidx in enumerate(client_dataidx):
-        unq, unq_cnt = np.unique(y_train[dataidx], return_counts=True) 
-        tmp = {unq[i]: unq_cnt[i] for i in range(len(unq))}
-        client_train_cls_counts_dict[client_idx] = tmp
-    logging.info('Data statistics: %s' % str(client_train_cls_counts_dict))
+        tmp = [y_train[dataidx].tolist().count(i) for i in unq]
+        client_train_cls_counts_dict.append(tmp)    
+        logs += f'{tmp}\n'
+    logging.info(logs)
     return client_train_cls_counts_dict
 
 class FetchData(object):
@@ -48,7 +49,6 @@ class FetchData(object):
             num_workers=4, 
             ):
 
-        # less use this.
         # For partition
         self.dataset = dataset.upper()
         self.datadir = datadir

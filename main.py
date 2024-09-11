@@ -96,7 +96,7 @@ def get_config():
     Data Configurations
     '''
     ## standard setting configurations
-    parser.add_argument('--data_dir', type=str, default='/remote-home/hongquanliu/Datasets')
+    parser.add_argument('--data_dir', type=str, default='/remote-home/share/fl_dataset')
     parser.add_argument('--dataset', type=str, default='cifar10')
     parser.add_argument('--num_workers', type=int, default=1)
 
@@ -106,7 +106,7 @@ def get_config():
     parser.add_argument('--s_steps', type=int, default=5, help='number of server local steps')
     parser.add_argument('--client_num', type=int, default=10)
     parser.add_argument('--join_ratio', type=float, default=0.5, help='ratio of clients to join in each round')
-    parser.add_argument('--split_type', type=str, default='iid', help='type of heterogeneity')
+    parser.add_argument('--split_type', type=str, default='iid', help='iid, dir_x, pat_x')
 
     # system config：
     parser.add_argument('--level', type=str, default='info', help='logging level',)
@@ -126,24 +126,21 @@ def get_config():
     elif args.client_num == 100:
         args.join_ratio = 0.1
         args.c_bs = 32
-        
+    
     args.dataset = args.dataset.upper()
     args.data_shape = shape[args.dataset]
     args.num_classes = classes[args.dataset]
-    if args.num_labels == -1 or args.num_labels > 1000:
-        args.batch_size = 128
-    else:
-        args.batch_size = 10
+
     if args.dataset in ['cifar10', 'cifar100', 'svhn']:
         args.img_sz = 32
 
-    args.exp_tag = f'{args.dataset}'
-    if args.algorithm == 'centralized':
-        args.exp_tag += f'_{args.algorithm}'
-    else:
-        args.exp_tag += f'_{args.split_type}_{args.client_num}_{args.algorithm}_ft-{args.ft_data_per_cls}'
+    args.exp_tag = f'{args.algorithm}_{args.dataset}'
+    if args.algorithm != 'centralized':
+        args.exp_tag += f'_{args.split_type}_{args.client_num}'
         if args.sBN:
             args.exp_tag += '_sBN'
+        if args.ft_data_per_cls:
+            args.exp_tag += f'_ft={args.ft_data_per_cls}'
     args.exp_tag += f'_seed={args.seed}'
     
     return args
