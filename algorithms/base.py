@@ -1,218 +1,238 @@
+import os
 import copy
 import time
+import torch
+import numpy as np
+import torch.nn as nn
 import torch.cuda as cuda
+import torch.nn.functional as F
 import torch.optim as optim
 from torch.utils.data import DataLoader
 from torch.nn.utils.clip_grad import clip_grad_norm_
-from sklearn.metrics import confusion_matrix
-from datasets import Subset4FL
-from utils import *
-
+from utils import get_optimizer, get_net_builder
+from datasets import fetch_dataset, split_dataset, SubDataset
+from utils import AverageMeter, make_batchnorm_stats
 
 class ServerBase(object):
     def __init__(self, args, Client) -> None:
-        self.algorithm = args.algorithm
         self.args = args
-        self.best_acc = 0
-        self.current_round = 0
-        self.num_classes = args.num_classes
-        self.client_num = args.client_num
-        self.clients = []
-        self.dataset = args.dataset
-        self.device = args.device
-        self.exp_tag = args.exp_tag
-        self.global_rounds = args.global_rounds
-        self.logger = args.logger
-        self.printer = args.printer
-        self.load_path = args.load_path
-        self.active_client = int(self.client_num * args.join_ratio)
         self.net = args.net
+        self.algorithm = args.algorithm
+        self.device = torch.device('cuda:0')
+        self.global_rounds = args.global_rounds
+        self.current_round = 0
+        self.num_clients = args.num_clients
+        self.num_join_clients = int(self.num_clients * args.join_ratio)
+        self.clients = []
+        self.logger = args.logger    #wandb跟踪器
+        self.printer = args.printer    #日志打印器
         self.save_dir = args.save_dir
-        self.sBN = args.sBN
+        self.exp_tag = args.exp_tag     #实验运行环境记录tag
+        self.load_path = args.load_path   
+        self.data_shape = args.data_shape
+        self.num_classes = args.num_classes
+        self.subset_list = args.subset_list   #数据子集列表
+        self.clip_grad = args.clip_grad
+        self.selection = None      
+        self.agg = args.agg             #client加权方式
+        self.best_acc = {}
         self.selected_clients = []
-        self.uploaded_models = []
-        self.uploaded_weights = []
-        self.ft = False
-        self.make_dataset(args)
+        self.global_model = self.make_model()   
+        self.global_optimizer = get_optimizer(self.global_model, optim_name='SGD', lr=0.05, momentum=args.global_momentum, weight_decay=0, nesterov=False)
+        self.optimizer = get_optimizer(self.global_model, optim_name=args.optim, lr=args.lr, momentum=args.momentum, weight_decay=args.weight_decay)
+        self.scheduler = optim.lr_scheduler.CosineAnnealingLR(self.optimizer, T_max=self.global_rounds, eta_min=0)
+        self.clt_set, self.testset = self.make_dataset(args)
         self.make_client(args, Client)
-        self.make_model()
-        self.make_optimizer(args)
+        self.sBN = args.sBN
         if self.sBN:
             self.batchnorm_dataset = self.make_norm_dataset()
-            
 
-    def make_optimizer(self, args):
-        self.optimizer = get_optimizer(self.global_model, optim_name=args.optim, lr=args.lr, momentum=args.momentum, weight_decay=args.weight_decay)
-        self.scheduler = get_cosine_schedule_with_warmup(self.optimizer, num_training_steps=self.global_rounds, num_warmup_steps=0)
-        
     def make_model(self):
-        self.printer.debug('Building models')
-        net_builder = get_net_builder(self.net)
-        self.global_model = net_builder(self.num_classes).to(self.device)
-        
+        self.printer.debug(f'make model: {self.net}')
+        net_builder = get_net_builder(self.net)   #获得网络构造器
+        model = net_builder(self.data_shape, self.num_classes).to(self.device)
+        return model    
+    
+    def make_dataset(self, args):
+        self.printer.debug('make dataset')
+        datasets = fetch_dataset(args.data_dir, args.dataset, train=True)
+        testset = fetch_dataset(args.data_dir, args.dataset, train=False)
+        client_per_domain = self.num_clients // len(self.subset_list)
+        clt_set = {}
+        for dm in self.subset_list:
+            dm_set = datasets[dm]
+            data_idx = split_dataset(dm_set, args, client_per_domain)
+            clt_set[dm] = (dm_set, data_idx)
+        return clt_set, testset
+
     def make_norm_dataset(self):
-        self.printer.debug('Making batchnorm dataset used for sBN')
-        return Subset4FL(self.dataset, self.trainset, dataidxs=None, transform=self.testset.transform)
+        self.printer.debug(f'make norm dataset')
+        dset = {}
+        for name in self.subset_list:
+            dset[name] = self.clt_set[name][0]
+        return dset
 
     def make_client(self, args, clientObj):
-        self.printer.debug('Creating clients')
-        for i in range(self.client_num):
-            trainset = Subset4FL(self.dataset, self.trainset, dataidxs=self.client_data_idx[i])
-            client = clientObj(args, i, trainset)
+        self.printer.debug('make clients')
+        num_domain = len(self.subset_list)
+        client_per_domain = self.num_clients // num_domain
+        matrix = np.zeros((self.num_clients, self.num_classes), dtype=np.int32)
+        for i in range(self.num_clients):
+            domain = self.subset_list[i // client_per_domain]
+            dataset, data_idx = self.clt_set[domain]
+            idx_i = data_idx[i % client_per_domain]
+            targets = dataset.targets
+            idx_i = np.array(idx_i, dtype=np.int32)
+            for j in range(self.num_classes):
+                matrix[i, j] = np.sum(targets[idx_i] == j)
+            client_set = SubDataset(dataset, idx_i)
+            client = clientObj(args, i, client_set)
             self.clients.append(client)
-        
-    def make_dataset(self, args):
-        self.printer.debug('Loading and spliting dataset')
-        data_info = fetch_fl_dataset(args.dataset, args.data_dir, args.split_type, args.client_num, args.ft_data_per_cls)
-        self.trainset, self.testset = data_info['train_ds'], data_info['test_ds']
-        self.client_data_idx = data_info['client_idx']
-        self.local_data_num = data_info['local_data_num']
-        self.local_distribution = data_info['local_distribution']
-        self.test_loader = DataLoader(self.testset, batch_size=args.eval_bs, shuffle=False)
-        if args.ft_data_per_cls > 0:
-            self.ft = True
-            self.local_steps = args.s_steps
-            self.batch_size = 20 if args.ft_data_per_cls * self.num_classes < 1000 else 200
-            self.ft_idx = data_info['ft_idx']
-            ft_set = Subset4FL(
-                self.dataset, self.trainset, self.ft_idx,
-                self.testset.transform,
-                compress_freq=args.compress_freq,
-                randomize=args.randomize,
-                del_num=args.del_freq_chs
-            )
-            self.ft_loader = DataLoader(ft_set, batch_size=self.batch_size, shuffle=True)
-            
-    def select_clients(self):
-        selected_clients = list(np.random.choice(self.clients, self.active_client, replace=False))
-        return selected_clients
-    
-    def receive_messages(self):
-        """
-        collect models, training samples
-        """
-        self.printer.info('Receiving models from clients')
-        self.uploaded_models = []
-        self.uploaded_weights = []
-        for i, client in enumerate(self.selected_clients):
-            id = client.id
-            model = copy.deepcopy(client.model).to(self.device).state_dict()
-            self.uploaded_models.append(model)
-            self.uploaded_weights.append(self.local_data_num[id])
-    
-    @torch.no_grad()
-    def aggregate(self):
-        self.printer.debug('Performing aggregation')
-        st = time.time()
-        
-        sample_num = sum(self.uploaded_weights)
-        weights = [w / sample_num for w in self.uploaded_weights]
 
-        if len(self.uploaded_models) > 0:
-            self.printer.info('--------------start aggregation--------------------')
-            self.printer.info(f'agg weights: {weights}')
-            new_dict = self.global_model.state_dict()
-            for i in range(len(weights)):
-                w = weights[i]
-                if i == 0:
-                    for v in new_dict.values():
-                        v = (v * w).type(v.dtype)
-                else:
-                    for v, lv in zip(new_dict.values(), self.uploaded_models[i].values()):
-                        v += (w * lv).type(v.dtype)
+        self.statistics = matrix
+        self.printer.info(f'----------------label distribution of clients-----------------\n{matrix}')
+
+
+    def select_clients(self, round_idx):
+        return list(np.random.choice(self.num_clients, self.num_join_clients, replace=False))
+        # if self.selection is None:
+        #     self.selection = [list(np.random.choice(self.num_clients, self.num_join_clients, replace=False)) for i in range(self.global_rounds)]
+        # return self.selection[round_idx]
+    
+    
+    def aggregate(self, uploaded_models, weights): 
+        """
+        aggregate model parameters based on the uploaded weights;
+        """   
+        self.printer.debug("------Base aggregate_models------")
+        if len(uploaded_models) > 0:
+            self.printer.info(f'aggregation weights: {weights}')
+            with torch.no_grad():
+                shadow_model = copy.deepcopy(self.global_model)
+                for param in shadow_model.parameters():
+                    param.data.zero_()
+                
+                for w, client_model in zip(weights, uploaded_models):
+                    for new_param, param in zip(client_model.parameters(), shadow_model.parameters()):
+                        param.data += w * new_param.data.clone()
+                
+                 # Directly replace global model parameters with the aggregated ones
+                with torch.no_grad():
+                    for new_param, param in zip(shadow_model.parameters(), self.global_model.parameters()):
+                        param.data.copy_(new_param.data)  # Directly replace parameter data
+
+                # update batchnorm statistics
+                for i in range(len(uploaded_models)):
+                    w, client_model = weights[i], uploaded_models[i]
+                    for gmodule, lmodule in zip(self.global_model.modules(), client_model.modules()):
+                        if isinstance(gmodule, nn.BatchNorm2d):
+                            if i == 0:
+                                gmodule.running_mean = lmodule.running_mean.clone() * w
+                                gmodule.running_var = lmodule.running_var.clone() * w
+                            else:
+                                gmodule.running_mean += lmodule.running_mean.clone() * w
+                                gmodule.running_var += lmodule.running_var.clone() * w
         else:
             self.printer.info('no uploaded models, skip aggregation')
-
-        self.printer.info(f'Time cost of aggregation: {(time.time() - st) / 60:.2f} min')  
     
-    def train(self, round):
-        st = time.time()
-        self.global_model.train(True)
-        ce_loss = nn.CrossEntropyLoss()
-        clip_grad = self.args.clip_grad
-        for epoch in range(self.local_steps):
-            for x, y in self.ft_loader:
-                x, y = x.to(self.device), y.to(self.device)
-                if len(y) < 2:
-                    continue
-                self.optimizer.zero_grad()
-                logits = self.global_model(x)
-                loss = ce_loss(logits, y)
-                loss.backward()
-                if clip_grad > 0:
-                    clip_grad_norm_(self.global_model.parameters(), clip_grad)
-                self.optimizer.step()
-        self.printer.info(f"server_train_time>> {(time.time() - st) / 60:.2f} min")
-            
-    def run(self):
+    def aggregate_models(self, round_idx):
         """
-        in this function, server only:
-            1.send model to clients;
-            2.select active clients for local training;
-            3.receive models from clients;
-            4.aggregate models;
-        rewrite this function if you wanna use a more complex algorithm
+        get local models from selected clients and aggregate them
         """
-        for round_idx in range(self.global_rounds):
-            self.printer.info(f'Round {round_idx}/{self.global_rounds}...')
-            st_time = time.time()
-            self.selected_clients = self.select_clients()
-            lr = self.scheduler.get_last_lr()[0]
+        uploaded_models = []
+        weights = []
+        for i, id in enumerate(self.selected_clients):
+            client = self.clients[id]
+        
+            model = copy.deepcopy(client.model).to(self.device)
+            uploaded_models.append(model)
+            if self.agg == 'uniform':
+                weights.append(1)
+            elif self.agg == 'weighted':
+                weights.append(len(client.trainset))
+            else:
+                raise ValueError(f'invalid aggregation method: {self.agg}')
+        wsum = sum(weights)
+        weights = [i / wsum for i in weights]
+        self.aggregate(uploaded_models, weights)
             
-            for i, client in enumerate(self.selected_clients):
-               client.train(round_idx, lr, self.global_model)
-
-            self.receive_messages()
-            self.aggregate()
-            if self.ft:
-                self.train(round_idx)
-            cuda.empty_cache()
-            self.scheduler.step()
-            if self.sBN:
-                make_batchnorm_stats(self.batchnorm_dataset, self.global_model, self.device)
-            self.test(round_idx)
-            self.printer.info(f'time cost {(time.time() - st_time)/60:.2f} min')
     
-
     @torch.no_grad()
-    def test(self, round_idx):
-        self.printer.info('Testing at round {}/{}'.format(round_idx, self.global_rounds))
-        st = time.time()
-        loader = self.test_loader
+    def test(self, data_name, loader):
+        self.printer.debug(f'-----------------testing on {data_name}-----------------')
         all_y, all_logits = [], []
         self.global_model.train(False)
         self.global_model.to(self.device)
-        for x, y in loader:   
-            x, y = x.to(self.device), y.to(self.device)
+        for data in loader:   
+            x, y = data['x'].to(self.device), data['y'].to(self.device)
             logits = self.global_model(x)
             all_y.append(y)
             all_logits.append(logits)
         y = torch.cat(all_y, dim=0)
         logits = torch.cat(all_logits, dim=0)
         test_acc = (y == torch.argmax(logits, dim=1)).float().mean().item() * 100
+        return test_acc
+    
+    def run(self):
+        if self.sBN:
+            make_batchnorm_stats(self.batchnorm_dataset, self.global_model, self.device)
+        for round_idx in range(self.global_rounds):
+            st_time = time.time()
+            self.selected_clients = self.select_clients(round_idx)
+            self.selected_clients.sort()
+            lr = self.scheduler.get_last_lr()[0]
+            model_dict = self.global_model.state_dict()
 
-        cm = confusion_matrix(y.cpu().numpy(), torch.argmax(logits, dim=1).cpu().numpy(), labels=range(self.num_classes))
-        class_per_acc = cm.diagonal() / (cm.sum(axis=0) + 1e-8)
-        logs = '------ precision: '
-        for i, acc in enumerate(class_per_acc):
-            logs += f'{acc * 100:.2f} '
-        self.printer.info(logs)
-
-        recall_per_class = cm.diagonal() / (cm.sum(axis=1) + 1e-8)
-        logs = '------ recall:    '
-        for i, acc in enumerate(recall_per_class):
-            logs += f'{acc * 100:.2f} '
-        self.printer.info(logs)
+            for id in self.selected_clients:
+               client = self.clients[id]
+               client.train(round_idx, lr, model_dict)
+            
+            self.aggregate_models(round_idx)
+            cuda.empty_cache() 
+            if self.sBN:
+                make_batchnorm_stats(self.batchnorm_dataset, self.global_model, self.device)
+            self.evaluate(round_idx)
+            self.printer.info(f'{round_idx}/{self.global_rounds} cost: {(time.time() - st_time) / 60:.2f} min')
+            self.printer.info('-' * 30)
+    
+    def evaluate(self, round_idx):
+        """
+        Evaluate the accuracy of current model on each domain testset
+        
+        """
+        st = time.time()
+        acc_ls = []
+        print_log = 'Evaluation: '
+        for name in self.subset_list:
+            data =self.testset[name]
+            loader = DataLoader(data, batch_size=512)
+            acc = self.test(name, loader)
+            acc_ls.append(acc)
+            if self.best_acc.get(name):
+                if acc > self.best_acc[name]:
+                    self.best_acc[name] = acc
+            else:
+                self.best_acc[name] = acc
+            log_dict = {f'{name}_test_acc': acc, f'{name}_best_acc': self.best_acc[name]}
+            self.logger.log(log_dict, step=round_idx)
+            print_log += f'{name}: {acc:.2f}%; '
+        
+        avg_acc = sum(acc_ls) / len(acc_ls)
         best = False
-        if test_acc > self.best_acc:
-            self.best_acc = test_acc
-            best = True
-        self.printer.info(f'------ test acc: {test_acc:.2f}% & best acc: {self.best_acc:.2f}%')
-        log_dict = {'test-top1_acc': test_acc, 'test-best_acc': self.best_acc}
+        if self.best_acc.get('global'):
+            if avg_acc > self.best_acc['global']:
+                self.best_acc['global'] = avg_acc
+                best = True
+        else:
+            self.best_acc['global'] = avg_acc
+        
+        log_dict = {f'global_test_acc': avg_acc, f'global_best_acc': self.best_acc['global']}
         self.logger.log(log_dict, step=round_idx)
-        if best:
-            self.save_model(round_idx, best=best)
-        self.printer.info(f"server_test_time>> {(time.time() - st) / 60:.2f} min")
+
+        print_log += f'avg_acc: {avg_acc:.2f}%; best_acc: {self.best_acc["global"] :.2f}%'
+        self.save_model(round_idx, best=best)
+        self.printer.info(print_log)
+        self.printer.info(f'evaluation cost: {(time.time() - st)/60:.2f} min')
 
 
     def save_model(self, round, best=False):
@@ -225,59 +245,69 @@ class ServerBase(object):
                 'ckpt_model': self.global_model.state_dict(),
             }
             torch.save(ckpt, path)
-        
+
 
 class ClientBase(object):
     def __init__(self, args, id, trainset) -> None:
         self.id = id
+        self.args = args
         self.net = args.net
+        self.exp_tag = args.exp_tag
         self.load_path = args.load_path
+        self.global_rounds = args.global_rounds
         self.local_steps = args.c_steps
+        self.save_dir = args.save_dir
+        self.trainset = trainset
+        self.data_shape = args.data_shape
         self.num_classes = args.num_classes
-        self.batch_size = args.c_bs
         self.logger = args.logger
         self.printer = args.printer
-        self.exp_tag = args.exp_tag
-        self.device = args.device
         self.clip_grad = args.clip_grad
-        self.trainset = trainset
-        self.loader = DataLoader(self.trainset, batch_size=self.batch_size, shuffle=True)
-        self.make_model()
-        self.make_optimizer(args)
-
-    def make_model(self):
-        self.printer.debug('Building models')
-        net_builder = get_net_builder(self.net)
-        self.model = net_builder(self.num_classes).to(self.device)
-    
-    def make_optimizer(self, args):
+        self.num_samples = len(trainset)
+        self.device = torch.device('cuda:0')
+        self.model = self.make_model()
         self.optimizer = get_optimizer(self.model, optim_name=args.optim, lr=args.lr, momentum=args.momentum, weight_decay=args.weight_decay)
         self.optimizer_dict = self.optimizer.state_dict()
+        self.loader = DataLoader(trainset, batch_size=args.c_bs, shuffle=True)
+        self.ls_func = nn.CrossEntropyLoss()
+        self.local_round=0
+        
 
-    def set_parameters(self, model):
-        for p, new_p in zip(self.model.parameters(), model.parameters()):
-            p.data = new_p.data.clone()
+    def make_model(self):
+        self.printer.debug(f'make model: {self.net}')
+        net_builder = get_net_builder(self.net)
+        model = net_builder(self.data_shape, self.num_classes).to(self.device)
+        return model   
+
+    def set_parameters(self, state_dict):
+        self.printer.debug(f'set parameters')
+        self.model.load_state_dict(state_dict)
     
-    def prepare(self, lr, model):
+    def prepare(self, lr, state_dict):
+        self.printer.debug(f'client preparation')
         self.model.to(self.device)
-        self.set_parameters(model)
+        self.set_parameters(state_dict)
         for group in self.optimizer_dict['param_groups']:
             group['lr'] = lr
         self.optimizer.load_state_dict(self.optimizer_dict)
 
-    def train(self, round_idx, lr, model_dict):
-        pass
+    def train(self, round_idx, lr, state_dict):
+        self.prepare(lr, state_dict)
+        self.model.train(True)
+        loss_meter = AverageMeter()
+        for step in range(self.local_steps):
+            loss_meter.reset()
+            for data in self.loader:
+                x, y = data['x'].to(self.device), data['y'].to(self.device)
+                if len(y) < 2:
+                    continue
+                logits = self.model(x)
+                loss = self.ls_func(logits, y)
+                self.optimizer.zero_grad()
+                loss.backward()
+                clip_grad_norm_(self.model.parameters(), self.clip_grad)
+                self.optimizer.step()
+                loss_meter.update(loss.item(), y.size(0))
+            self.printer.info(f'C{self.id:<2d}:{step}/{self.local_steps} >> avg loss {loss_meter.avg:.2f}')
+        self.model.to('cpu')
 
-    @torch.no_grad()
-    def test(self):
-        self.model.train(False)
-        all_y, all_logits = [], []
-        for x, y in self.loader:   
-            x, y = x.to(self.device), y.to(self.device)
-            logits = self.model(x)
-            all_y.append(y)
-            all_logits.append(logits)
-        y = torch.cat(all_y, dim=0)
-        logits = torch.cat(all_logits, dim=0)
-        return (y == torch.argmax(logits, dim=1)).float().mean().item() * 100
-        

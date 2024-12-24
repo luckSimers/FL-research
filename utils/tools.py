@@ -72,9 +72,10 @@ def get_logger(name, save_path=None, level='INFO'):
 
     return logger
 
-
-
 def make_batchnorm(m, momentum, track_running_stats):
+    """"
+        change the set of batchNorm layer
+    """
     if isinstance(m, nn.BatchNorm2d):
         m.momentum = momentum
         m.track_running_stats = track_running_stats
@@ -87,15 +88,25 @@ def make_batchnorm(m, momentum, track_running_stats):
             m.register_buffer('running_var', None)
             m.register_buffer('num_batches_tracked', None)
 
-def make_batchnorm_stats(dataset, test_model, device):
+def make_batchnorm_stats(datasets, test_model, device):
+    """
+        update the batchnorm layer
+    """
     with torch.no_grad():
         test_model.apply(lambda m: make_batchnorm(m, momentum=None, track_running_stats=True))
-        data_loader = DataLoader(dataset, batch_size=250)
-        test_model.train(True)
-        for x, y in data_loader:
-            x = x.to(device)
-            test_model(x)
-
+        if isinstance(datasets, dict):
+            for name, dataset in datasets.items():
+                data_loader = DataLoader(dataset, batch_size=500)
+                test_model.train(True)
+                for i, data in enumerate(data_loader):
+                    x = data['x'].to(device)
+                    test_model(x)
+        else:
+            data_loader = DataLoader(datasets, batch_size=500)
+            test_model.train(True)
+            for i, data in enumerate(data_loader):
+                x = data['x'].to(device)
+                test_model(x)
 
 class Special_Argument(object):
     """
@@ -110,8 +121,10 @@ class Special_Argument(object):
         self.default = default
         self.help = help
 
-
 def plot_tsne(model, dataloader, device, use_prototype=False):
+    '''
+    show the feature space in the 2d figure
+    '''
     model.eval()
     all_reps = []
     all_y = []
@@ -133,7 +146,6 @@ def plot_tsne(model, dataloader, device, use_prototype=False):
     plt.colorbar(ticks=range(3))
     plt.savefig(f'{use_prototype}_tsne.png')
 
-
 def get_params(model, detach=True) -> torch.Tensor:
     params = None
     for p in model.parameters():
@@ -150,5 +162,11 @@ def get_params(model, detach=True) -> torch.Tensor:
                     params = torch.cat((params, p.data.view(-1)), dim=0)
     return params # type: ignore
 
-
+def mixup_data(x, y, alpha=0.75):
+    lam = np.random.beta(alpha, alpha)
+    b = x.size()[0]
+    index = torch.randperm(b)
+    mixed_x = lam * x + (1 - lam) * x[index]
+    y_a, y_b = y, y[index]
+    return mixed_x, y_a, y_b, lam
 

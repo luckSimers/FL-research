@@ -1,12 +1,8 @@
-# Copyright (c) Microsoft Corporation.
-# Licensed under the MIT License.
-
 import os
+import copy
+import torch
 import random
 import numpy as np
-import torch
-from torch.utils.data import sampler, DataLoader
-import torch.distributed as dist
 from io import BytesIO
 
 # TODO: better way
@@ -51,9 +47,6 @@ def split_ssl_data(args, data, targets, num_classes,
     
     return data[lb_idx], targets[lb_idx], data[ulb_idx], targets[ulb_idx]
 
-
-def sample_labeled_data():
-    pass
 
 
 def sample_labeled_unlabeled_data(args, data, target, num_classes,
@@ -155,3 +148,111 @@ def random_subsample(wav: np.ndarray, max_length: float, sample_rate: int = 1600
         return wav
     random_offset = random.randint(0, len(wav) - sample_length - 1)
     return wav[random_offset : random_offset + sample_length]
+
+
+def split_labeled_unlabeled(imgs, labels, num_classes, lb_per_class):
+    labeled_set = []
+    for i in range(num_classes):
+        idx = np.where(labels == i)[0]
+        labeled_set.extend(idx[:lb_per_class])
+    idx = list(range(len(labels)))
+    unlabeled_idx = list(set(idx) - set(labeled_set))
+    return imgs[labeled_set], labels[labeled_set], imgs[unlabeled_idx], labels[unlabeled_idx]
+
+def split_dataset(dataset, args, num_clients):
+    '''
+    splitting {dataset} into {num_users} parts in IID or Non-IID mode
+    return:
+        data_split: [[data_idx_0], [data_idx_1], ...]
+    '''
+    split_type = args.split_type
+    if split_type == 'iid':
+        data_idx = iid(dataset, num_clients)
+    elif split_type.split('_')[0] in ['pat', 'dir']:
+        data_idx = non_iid(dataset, num_clients, split_type)
+    else:
+        raise ValueError('Not valid data split mode')
+    return data_idx
+
+
+def iid(dataset, num_users):
+    '''
+    splitting dataset into num_users parts for FL in IID
+    '''
+    num_items = int(len(dataset) / num_users)
+    
+    data_split = [[] for _ in range(num_users)]
+    random_idx = torch.randperm(len(dataset))
+    for i in range(num_users):
+        if i == num_users - 1:
+            data_split[i] = random_idx[i * num_items:].tolist()
+        else:
+            data_split[i] = random_idx[i * num_items: (i + 1) * num_items].tolist()
+    return data_split
+
+
+def non_iid(dataset, num_users, data_split_mode):
+    num_classes = dataset.classes
+    target = torch.tensor(dataset.targets)
+    split_type, split_param = data_split_mode.split('_')
+    data_split = [[] for i in range(num_users)]
+    if split_type == 'pat':
+        shard_per_user = int(split_param)
+        target_idx_split = {}
+        shard_per_class = int(shard_per_user * num_users / num_classes)
+        if shard_per_class * num_classes != shard_per_user * num_users:
+            raise ValueError('Not valid data split mode')
+        for target_i in range(num_classes):
+            target_idx = torch.where(target == target_i)[0]
+            num_leftover = len(target_idx) % shard_per_class
+            leftover = target_idx[-num_leftover:] if num_leftover > 0 else []
+            new_target_idx = target_idx[:-num_leftover] if num_leftover > 0 else target_idx
+            new_target_idx = new_target_idx.reshape((shard_per_class, -1)).tolist()
+            for i, leftover_target_idx in enumerate(leftover):
+                new_target_idx[i] = new_target_idx[i] + [leftover_target_idx.item()]
+            target_idx_split[target_i] = new_target_idx
+        target_split = list(range(num_classes)) * shard_per_class
+        target_split = torch.tensor(target_split)[torch.randperm(len(target_split))].tolist()
+        target_split = torch.tensor(target_split).reshape((num_users, -1)).tolist()
+        for i in range(num_users):
+            for target_i in target_split[i]:
+                idx = torch.randint(len(target_idx_split[target_i]), (1,)).item()
+                data_split[i].extend(target_idx_split[target_i].pop(idx))
+
+    elif split_type == 'dir':
+        beta = float(split_param)
+        dir = torch.distributions.dirichlet.Dirichlet(torch.tensor(beta).repeat(num_users)) # type: ignore
+        min_size = 0
+        required_min_size = 10
+        N = target.size(0)
+        while min_size < required_min_size:
+            data_split = [[] for _ in range(num_users)]
+            for target_i in range(num_classes):
+                target_idx = torch.where(target == target_i)[0]
+                proportions = dir.sample()
+                proportions = torch.tensor(
+                    [p * (len(data_split_idx) < (N / num_users)) for p, data_split_idx in zip(proportions, data_split)])
+                proportions = proportions / proportions.sum()
+                split_idx = (torch.cumsum(proportions, dim=-1) * len(target_idx)).long().tolist()[:-1]
+                split_idx = torch.tensor_split(target_idx, split_idx)
+                data_split = [data_split_idx + idx.tolist() for data_split_idx, idx in zip(data_split, split_idx)]
+            min_size = min([len(data_split_idx) for data_split_idx in data_split])
+    else:
+        raise ValueError('Not valid data split mode tag')
+    return data_split
+
+
+
+def separate_dataset(dataset, idx):
+    separated_dataset = copy.deepcopy(dataset)
+    separated_dataset.data = [dataset.data[s] for s in idx]
+    separated_dataset.targets = [dataset.targets[s] for s in idx]
+    return separated_dataset
+
+
+def make_batchnorm_dataset_su(server_dataset, client_dataset):
+    batchnorm_dataset = copy.deepcopy(server_dataset)
+    batchnorm_dataset.data = batchnorm_dataset.data + client_dataset.data
+    batchnorm_dataset.target = batchnorm_dataset.target + client_dataset.target
+    batchnorm_dataset.other['id'] = batchnorm_dataset.other['id'] + client_dataset.other['id']
+    return batchnorm_dataset

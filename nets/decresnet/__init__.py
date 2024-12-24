@@ -1,0 +1,1 @@
+from .decresnet import resnet9_dec, resnet18_dec

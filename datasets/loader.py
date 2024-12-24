@@ -1,248 +1,203 @@
-import logging
-import random
-import math
-import functools
 import os
-import json
-import numpy as np
+import copy
 import torch
-import torch.utils.data as data
-import torchvision.transforms as transforms
+import logging
+import numpy as np
 import torchvision.datasets as datasets
+from scipy.io import loadmat
+from .dataset import BasicDataset
+from .utils import split_labeled_unlabeled
 
 
+def load_mnistm(base_dir, train=True):
+    """
+    numbers: 55000
+    shape: 3x28x28
+    class dist: [5444. 6179. 5470. 5638. 5307. 4987. 5417. 5715. 5389. 5454.]
+    """
+    mnistm_data = loadmat(base_dir + '/mnistm_with_label.mat')
+    if train:
+        data = mnistm_data['train']
+        labels = mnistm_data['label_train']
+    else:
+        data = mnistm_data['test']
+        labels = mnistm_data['label_test']
+    data = data.transpose(0, 3, 1, 2)
+    labels = labels.argmax(axis=1).astype(np.int64)
+    np.place(labels, labels == 10, 0)
+    logging.debug(f'loading mnistm done! train={train} shape={data.shape}')
+    
+    return data, labels
 
-data_stats = {'MNIST': ((0.1307,), (0.3081,)), 'FashionMNIST': ((0.2860,), (0.3530,)),
-              'CIFAR10': ((0.4914, 0.4822, 0.4465), (0.2023, 0.1994, 0.2010)),
-              'CIFAR100': ((0.5071, 0.4865, 0.4409), (0.2673, 0.2564, 0.2762)),
-              'SVHN': ((0.4377, 0.4438, 0.4728), (0.1980, 0.2010, 0.1970)),
-              'STL10': ((0.4409, 0.4279, 0.3868), (0.2683, 0.2610, 0.2687))}
+def load_syn(base_dir, train=True):
+    """
+    numbers: 25000
+    shape: 3x32x32
+    class dist: [2475. 2600. 2566. 2456. 2534. 2496. 2505. 2479. 2401. 2488.]
+    """
+    syn_data = loadmat(base_dir + '/syn_number.mat')
+    if train:
+        data = syn_data['train_data']
+        labels = syn_data['train_label']
+    else:
+        data = syn_data['test_data']
+        labels = syn_data['test_label']
+    data = data.transpose(0, 3, 1, 2)
+    labels = labels.astype(np.int64).squeeze()
+    np.place(labels, labels == 10, 0)
+    logging.debug(f'loading syn done! train={train} shape={data.shape}')
+    return data, labels
 
-
-def record_data_stats(y_train, client_dataidx):
-    client_train_cls_counts_dict = []
-    unq = np.unique(y_train)
-    logs = '-----------Local Data Distribution-----------\n'
-    for client_idx, dataidx in enumerate(client_dataidx):
-        tmp = [y_train[dataidx].tolist().count(i) for i in unq]
-        client_train_cls_counts_dict.append(tmp)    
-        logs += f'{tmp}\n'
-    logging.info(logs)
-    return client_train_cls_counts_dict
-
-class FetchData(object):
-
-    image_resolution_dict = {
-        "cifar10": 32,
-        "cifar100": 32,
-        "SVHN": 32,
-        "fmnist": 32,
+def load_digits(data_root, train=True, lb_per_class=0, labeled_set='SVHN',):
+    '''
+    return a dict of datasets {
+        'MNISTM': mnistm,
+        'SYN': syn,
+        'USPS': usps,
+        'SVHN': svhn,
+        'MNIST': mnist,
+        'lb_set': lb_set
     }
+    '''
+    # load data from each dataset
+    digits = {}
+    num_sample = 7000
+    classes = 10
+    if not train:
+        num_sample = None
+    imgs_l = None
+    # load mnistm
+    imgs, labels = load_mnistm(os.path.join(data_root, 'DIGIT5'), train=train)    
+    perm = np.random.permutation(imgs.shape[0])
+    if labeled_set == 'MNISTM' and train and lb_per_class > 0:
+        imgs_l, label_l =  imgs[perm][num_sample:], labels[perm][num_sample:]
+        imgs_l, label_l, _, _ = split_labeled_unlabeled(imgs_l, label_l, 10, lb_per_class)
+    imgs, labels = imgs[perm][:num_sample], labels[perm][:num_sample]
+    digits['MNISTM'] = BasicDataset(
+        'MNISTM', imgs, labels, classes, is_train=train)
+    
+    # load syn
+    imgs, labels = load_syn(os.path.join(data_root, 'DIGIT5'), train=train)
+    perm = np.random.permutation(imgs.shape[0])
+    if labeled_set == 'SYN' and train and lb_per_class > 0:
+        imgs_l, label_l = imgs[perm][num_sample:], labels[perm][num_sample:]
+        imgs_l, label_l, _, _ = split_labeled_unlabeled(imgs_l, label_l, 10, lb_per_class)
+    imgs, labels = imgs[perm][:num_sample], labels[perm][:num_sample]
+    digits['SYN'] = BasicDataset(
+        'SYN', imgs, labels, classes, is_train=train)
+    
+    # load usps
+    dset = datasets.USPS(root=os.path.join(data_root, 'USPS'), train=train, download=True)
+    imgs, labels = dset.data, np.array(dset.targets).astype(np.int64)
+    perm = np.random.permutation(imgs.shape[0])
+    if labeled_set == 'USPS' and train and lb_per_class > 0:
+        imgs_l, label_l =  imgs[perm][num_sample:], labels[perm][num_sample:]
+        imgs_l, label_l, _, _ = split_labeled_unlabeled(imgs_l, label_l, 10, lb_per_class)
+    imgs, labels = imgs[perm][:num_sample], labels[perm][:num_sample]
+    digits['USPS'] = BasicDataset(
+        'USPS', imgs, labels, classes, is_train=train)
+    
+    # load svhn
+    dset = datasets.SVHN(root=os.path.join(data_root, 'SVHN'), split='train' if train else 'test', download=True)
+    imgs, labels = dset.data, dset.labels.astype(np.int64)
+    perm = np.random.permutation(imgs.shape[0])
+    if labeled_set == 'SVHN' and train and lb_per_class > 0:
+        imgs_l, label_l =  imgs[perm][num_sample:], labels[perm][num_sample:]
+        imgs_l, label_l, _, _ = split_labeled_unlabeled(imgs_l, label_l, 10, lb_per_class)
+    imgs, labels = imgs[perm][:num_sample], labels[perm][:num_sample]
+    digits['SVHN'] = BasicDataset(
+        'SVHN', imgs, labels, classes, is_train=train)
+    
+    # load mnist
+    dset = datasets.MNIST(root=os.path.join(data_root, 'MNIST'), train=train, download=True)
+    imgs, labels = dset.data.numpy(), dset.targets.numpy().astype(np.int64)
+    perm = np.random.permutation(imgs.shape[0])
+    if labeled_set == 'MNIST' and train and lb_per_class > 0:
+        imgs_l, label_l =  imgs[perm][num_sample:], labels[perm][num_sample:]
+        imgs_l, label_l, _, _ = split_labeled_unlabeled(imgs_l, label_l, 10, lb_per_class)
+    imgs, labels = imgs[perm][:num_sample], labels[perm][:num_sample]
+    # imgs.resize((len(imgs), 1, 28, 28)) 
+    digits['MNIST'] = BasicDataset(
+        'MNIST', imgs, labels, classes, is_train=train)
 
-    def __init__(
-            self, 
-            dataset="", 
-            datadir="./",
-            partition_type="iid", 
-            client_number=1, 
-            ft_data=0,
-            num_workers=4, 
-            ):
+    lb_set = None
+    if imgs_l is not None:
+        lb_set = BasicDataset(
+            labeled_set, imgs_l, label_l, classes, is_train=train)
+    digits['lb_set'] = lb_set        
+    return digits
 
-        # For partition
-        self.dataset = dataset.upper()
-        self.datadir = datadir
-        self.partition_type = partition_type
-        self.client_number = client_number
-        self.num_workers = num_workers
-        self.ft_data = ft_data
-        self.other_params = {}
+def load_office31(data_root, train=True, lb_per_class=0, labeled_set='SVHN'):
+    num_sample = 1000
+    raise NotImplementedError
 
 
-    def load_data(self):
-        self.other_params['ft_idx'] = None
-        if self.client_number > 1:
-            train_ds, test_ds = self.federated_split() 
-            self.other_params["local_counts"] = self.local_counts
-            self.other_params["client_idx"] = self.client_idx
-            return train_ds, test_ds, self.local_data_num, self.class_num, self.other_params
-        train_ds, test_ds = self.fetch_dataset()
-        self.other_params["local_counts"] = None
-        self.other_params["client_idx"] = None
+def load_normal_dataset(data_root, dataset, train=True, lb_per_class=0):
+    logging.info("load_normal_dataset {}...".format(dataset))
+    dset = getattr(datasets, dataset)     #dataset.dataset类 用于加载数据
+    data_root = os.path.join(data_root, dataset)
+    if dataset == 'SVHN':
+        if train:
+            dset = dset(data_root, split='train', download=True)
+        else:
+            dset = dset(data_root, split='test', download=True)
+        classes = 10
+        imgs, labels = dset.data, dset.labels
+    else: # CIFAR10, CIFAR100, MNIST
+        dset = dset(data_root, train=train, download=True)
+        classes = len(dset.classes)
+        imgs, labels = dset.data, dset.targets
+    
+    if type(imgs) == torch.Tensor:
+        imgs = imgs.numpy()
+    if type(labels) == list:
+        labels = np.array(labels)
+    elif type(labels) == torch.Tensor:
+        labels = labels.numpy()
+    labels = labels.astype(np.int64)
+
+    perm = np.random.permutation(imgs.shape[0])
+    imgs, labels = imgs[perm], labels[perm]
+    if train and lb_per_class > 0:
+        img_lb, labels_lb, img_ulb, labels_ulb = split_labeled_unlabeled(imgs, labels, classes, lb_per_class)
+        lb_set = BasicDataset(
+            dataset, img_lb, labels_lb, classes, is_train=train)
+        ulb_set = BasicDataset(
+            dataset, img_ulb, labels_ulb, classes, is_train=train)
+    else:
+        lb_set = None
+        ulb_set = BasicDataset(
+            dataset, imgs, labels, classes, is_train=train)
+    return {
+        'lb_set': lb_set,
+        dataset: ulb_set,
+    }
+    
+
+def fetch_dataset(data_root, dataset, lb_per_class=0, labeled_set='', train=True):
+    """
+    return Dict :{
+        subset: BasicDataset,
+        ...,
+        lb_set: BasicDataset
+    }
+    """
+    if dataset in ['DIGIT5', 'Office31'] and lb_per_class > 0 and labeled_set == '':
+        raise ValueError('labeled_set must be specified when lb_per_class > 0')
+    
+    logging.info(f'fetching dataset-{dataset} from {data_root}...')
+    if dataset in ['MNIST', 'CIFAR10', 'CIFAR100', 'SVHN']:
+        return load_normal_dataset(data_root, dataset, train, lb_per_class)
+    
+    elif dataset == 'DIGIT5':
+        return load_digits(data_root, train, lb_per_class, labeled_set)
+    
+    elif dataset == 'Office31':
+        return load_office31(data_root, train, lb_per_class, labeled_set)
+
+    else:
+        raise ValueError('Not valid dataset name')
+
+
         
-        return train_ds, test_ds, len(train_ds), self.class_num, self.other_params
-
-    def fetch_dataset(self):
-        '''
-        load dataset: data_name
-        return dataset{
-            'trainset': train set,
-            'testset': test set
-        }
-        '''
-        data_name = self.dataset
-        data_dir = self.datadir
-        logging.debug('fetching data of {}-dataset'.format(data_name))
-        data_dir = os.path.join(data_dir, data_name)
-        dset = getattr(datasets, data_name)
-        if data_name in ['MNIST', 'FashionMNIST', 'CIFAR10', 'CIFAR100', 'SVHN']:
-            if data_name in ['MNIST', 'FashionMNIST']:
-                train_transform = transforms.Compose([
-                    transforms.ToTensor(),
-                    transforms.Normalize(*data_stats[data_name])])
-                test_transform = transforms.Compose([
-                    transforms.ToTensor(),
-                    transforms.Normalize(*data_stats[data_name])])
-                trainset = dset(data_dir, train=True, download=True, transform=train_transform)
-                testset = dset(data_dir, train=False, download=True, transform=test_transform)
-            elif data_name in ['CIFAR10', 'CIFAR100']:
-                train_transform = transforms.Compose([
-                    transforms.RandomHorizontalFlip(),
-                    transforms.RandomCrop(32, padding=4, padding_mode='reflect'),
-                    transforms.ToTensor(),
-                    transforms.Normalize(*data_stats[data_name])])
-                test_transform = transforms.Compose([
-                    transforms.ToTensor(),
-                    transforms.Normalize(*data_stats[data_name])])
-                trainset = dset(data_dir, train=True, download=True, transform=train_transform)
-                testset = dset(data_dir, train=False, download=True, transform=test_transform)
-            else:
-                train_transform = transforms.Compose([
-                    transforms.RandomCrop(32, padding=4, padding_mode='reflect'),
-                    transforms.ToTensor(),
-                    transforms.Normalize(*data_stats[data_name])])
-                test_transform = transforms.Compose([
-                    transforms.ToTensor(),
-                    transforms.Normalize(*data_stats[data_name])])
-                trainset = dset(data_dir, split='train', download=True, transform=train_transform)
-                testset = dset(data_dir, split='test', download=True, transform=test_transform)
-                # SVHN training split comprises 73257 digits, testing split comprises 26032 digits.
-
-            if not hasattr(trainset, 'targets'):
-                ## align SVHN with CIFAR dataset
-                trainset.targets = trainset.labels
-                testset.targets = testset.labels
-            
-            if not hasattr(trainset, 'classes'):
-                ## align SVHN with CIFAR dataset
-                class_num =  len(set(testset.targets))
-                trainset.classes = list(range(class_num))
-                testset.classes = list(range(class_num))
-
-            self.class_num = len(trainset.classes)
-
-            logging.info('default augmentation for train set: {}'.format(train_transform))
-            logging.info('dataset: {}, classes: {}, {} train samples and {} test samples'.format(
-                data_name, self.class_num, len(trainset), len(testset)))
-        else:
-            raise NotImplementedError
-        return trainset, testset
-
-
-    def get_y_train_np(self, train_ds):
-        if self.dataset in ["fmnist"]:
-            y_train = train_ds.targets.data
-        else:
-            y_train = train_ds.targets
-        y_train_np = np.array(y_train)
-        return y_train_np
-
-
-    def federated_split(self):
-        logging.debug("federated_split")
-        train_ds, test_ds = self.fetch_dataset()
-        if self.ft_data > 0:
-            targets = np.array(train_ds.targets)
-            idx = []
-            for i in range(len(train_ds.classes)):
-                idx_i = np.where(targets == i)[0]
-                np.random.shuffle(idx_i)
-                idx_i = idx_i[:self.ft_data]
-                idx.extend(idx_i)
-            self.other_params['ft_idx'] = idx
-
-        y_train_np = self.get_y_train_np(train_ds)  
-        self.global_train_num = y_train_np.shape[0]
-        self.global_test_num = len(test_ds) 
-
-        self.client_idx, self.local_counts = self.partition_data(y_train_np, self.global_train_num)
-
-        self.local_data_num = [] 
-        # self.local_train_loader = []
-        for id in range(self.client_number):
-            # train_ds= self.load_sub_data(client_index, train_ds, test_ds)
-            self.local_data_num.append(len(self.client_idx[id]))
-            # train_dl = data.DataLoader(dataset=train_ds, batch_size=self.batch_size, shuffle=True, 
-            #                     drop_last=True, num_workers=self.num_workers)
-            # self.local_train_loader.append(train_dl)
-        return train_ds, test_ds
-
-
-    def partition_data(self, y_train_np, train_data_num):
-
-        logging.info("partition_type = " + (self.partition_type))
-
-        if self.partition_type == "iid":
-            logging.debug('IID partitioning')
-            total_num = train_data_num
-            idxs = np.random.permutation(total_num)
-            batch_idxs = np.array_split(idxs, self.client_number)
-            client_idx = {i: batch_idxs[i] for i in range(self.client_number)}
-
-        elif self.partition_type.startswith('dir'):
-            logging.debug('dirichlet Partitioning')
-            alpha = float(self.partition_type.split('_')[1])
-            min_size = 0
-            client_idx = {}  
-            while min_size < self.class_num  :
-                idx_batch = [[] for _ in range(self.client_number)]
-              
-                for k in range(self.class_num): 
-                    idx_k = np.where(y_train_np == k)[0]
-                    np.random.shuffle(idx_k)
-                    proportions = np.random.dirichlet(np.repeat(alpha, self.client_number))
-                    proportions = np.array([p * (len(idx_j) < train_data_num / self.client_number) for p, idx_j in zip(proportions, idx_batch)])
-                    proportions = proportions / proportions.sum()
-                    proportions = (np.cumsum(proportions) * len(idx_k)).astype(int)[:-1]
-                    idx_batch = [idx_j + idx.tolist() for idx_j, idx in zip(idx_batch, np.split(idx_k, proportions))]
-                    min_size = min([len(idx_j) for idx_j in idx_batch])
-
-            for j in range(self.client_number):
-                np.random.shuffle(idx_batch[j])
-                client_idx[j] = idx_batch[j]
-
-        elif self.partition_type.startswith('pat'):
-            logging.debug('Pathological partitioning')
-            shard_per_user = int(self.partition_type.split('_')[1])
-            client_idx = {}  
-            shard_per_class = int(shard_per_user * self.client_number / self.class_num)
-            target_split = {}
-            for k in range(self.class_num):
-                idx_k = np.where(y_train_np == k)[0]
-                num_leftover = len(idx_k) % shard_per_class
-                leftover = idx_k[-num_leftover:] if num_leftover > 0 else []
-                new_idx_k = idx_k[:-num_leftover] if num_leftover > 0 else idx_k
-                new_idx_k = np.split(new_idx_k, shard_per_class)
-                for i, leftover_target_idx in enumerate(leftover):
-                    new_idx_k[i] = np.append(new_idx_k[i], leftover_target_idx)
-                target_split[k] = new_idx_k
-            target_shard = np.array(list(range(self.class_num)) * shard_per_class)
-            target_shard = np.random.permutation(target_shard).reshape((self.client_number, -1))
-            for i in range(self.client_number):
-                client_idx[i] = np.array([], dtype=int)
-                for k in target_shard[i]:
-                    idx = np.random.randint(len(target_split[k]))
-                    client_idx[i] = np.append(client_idx[i], target_split[k][idx])
-                    target_split[k] = np.delete(target_split[k], idx, axis=0)
-
-        else:
-            raise NotImplementedError
-
-        client_idx = [client_idx[i] for i in range(self.client_number)]
-        local_counts = record_data_stats(y_train_np, client_idx)
-
-        return client_idx, local_counts
-
-
-
-
+    

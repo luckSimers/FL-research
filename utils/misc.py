@@ -26,44 +26,9 @@ def over_write_args_from_file(args, yml):
             setattr(args, k, dic[k])
 
 
-def send_model_cuda(args, model, clip_batch=True):
-    if not torch.cuda.is_available():
-        raise Exception('ONLY GPU TRAINING IS SUPPORTED')
-    elif args.distributed:
-        ngpus_per_node = torch.cuda.device_count()  # number of gpus of each node
-
-        if args.gpu is not None:
-            torch.cuda.set_device(args.gpu)
-
-            '''
-            batch_size: batch_size per node -> batch_size per gpu
-            workers: workers per node -> workers per gpu
-            '''
-            if clip_batch:
-                args.batch_size = int(args.batch_size / ngpus_per_node)
-            model.cuda(args.gpu)
-            model = nn.SyncBatchNorm.convert_sync_batchnorm(model)
-            model = torch.nn.parallel.DistributedDataParallel(model, broadcast_buffers=False,
-                                                                     find_unused_parameters=True,
-                                                                     device_ids=[args.gpu])
-        else:
-            # if arg.gpu is None, DDP will divide and allocate batch_size
-            # to all available GPUs if device_ids are not set.
-            model.cuda()
-            model = torch.nn.parallel.DistributedDataParallel(model,  broadcast_buffers=False, 
-                                                                      find_unused_parameters=True)
-    elif args.gpu is not None:
-        torch.cuda.set_device(args.gpu)
-        model = model.cuda(args.gpu)
-    else:
-        model = torch.nn.DataParallel(model).cuda()
-    return model
-
-
 def count_parameters(model):
     # count trainable parameters
     return sum(p.numel() for p in model.parameters() if p.requires_grad)
-
 
 
 class Bn_Controller:
