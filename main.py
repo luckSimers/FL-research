@@ -4,19 +4,28 @@ import time
 import wandb
 import torch
 import argparse
-from algorithms.fedavg_layer import FedAvgLayer
+from algorithms.fedavg_fisher import FedAvgFisher
+
+from algorithms.fedbest import FedBest
 from utils import get_logger, set_random_seed
 
 from algorithms import FedAvg
 from algorithms import Centralized
 from algorithms import FedProx
 from algorithms import FedBN
+from algorithms import FedFc
+from algorithms import FedAllFc
+
+
 name2algo = {
     'centralized': Centralized,
     'fedavg': FedAvg,
     'fedprox': FedProx,
     'fedbn':FedBN,
-    'fedavg_fisher_kd':FedAvgLayer,          #base on fisher KD
+    'fedavgfisher':FedAvgFisher,          #base on fisher KD
+    'fedbest':FedBest,
+    'fedfc':FedFc,
+    'fedallfc':FedAllFc,
 
 }
 shape = {
@@ -68,7 +77,7 @@ def get_config():
     '''
     Saving & loading of the model.
     '''
-    parser.add_argument('--pj_name', type=str, default='FL')
+    parser.add_argument('--pj_name', type=str, default='FL_FC_new1')
     parser.add_argument('--save_dir', type=str, default='./results')
     parser.add_argument('--load_path', type=str, default='')
     parser.add_argument('--eval_gap', type=int, default=1, help='evaluation frequency')
@@ -96,27 +105,27 @@ def get_config():
     Algorithms Configurations
     '''  
     ## core algorithm setting
-    parser.add_argument('--algorithm', type=str, default='fedavg_fisher_kd', help='')
+    parser.add_argument('--algorithm', type=str, default='fedfc', help='')
     '''
     Data Configurations
     '''
     ## standard data setting configurations
     parser.add_argument('--data_dir', type=str, default='/remote-home/share/fl_dataset')
-    parser.add_argument('--dataset', type=str, default='CIFAR10')
+    parser.add_argument('--dataset', type=str, default='CIFAR100')
 
     ## Federated Learning setting configurations
-    parser.add_argument('--global_rounds', type=int, default=7)
-    parser.add_argument('--c_steps', type=int, default=50, help='number of local steps')
+    parser.add_argument('--global_rounds', type=int, default=100)
+    parser.add_argument('--c_steps', type=int, default=2, help='number of local steps')
     parser.add_argument('--s_steps', type=int, default=1, help='number of server local steps')
     parser.add_argument('--num_clients', type=int, default=10)
     parser.add_argument('--join_ratio', type=float, default=1, help='ratio of clients to join in each round')
-    parser.add_argument('--split_type', type=str, default='dir_0.3', help='iid, dir_x, pat_x')
-    parser.add_argument('--agg', type=str, default='uniform', help='uniform, weighted')
+    parser.add_argument('--split_type', type=str, default='dir_0.6', help='iid, dir_x, pat_x')
+    parser.add_argument('--agg', type=str, default='weighted', help='uniform, weighted')
 
     # system config：
     parser.add_argument('--level', type=str, default='info', help='logging level',)
     parser.add_argument('--seed', type=int, default=100)
-    parser.add_argument('--visible_gpu', type=str, default='2')
+    parser.add_argument('--visible_gpu', type=str, default='7')
   
     # FedProx Config
     parser.add_argument('--mu', type=float, default=0.1, help='proximal term')

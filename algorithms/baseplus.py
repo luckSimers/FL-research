@@ -16,7 +16,7 @@ from utils import AverageMeter, make_batchnorm_stats
 from nngeometry.metrics import FIM
 from nngeometry.object import PMatDiag
 import torch.nn.functional as F
-
+from torch.optim.lr_scheduler import StepLR, CosineAnnealingLR
 
 
 
@@ -70,13 +70,13 @@ class ServerBasePlus(ServerBase):
             self.selected_clients.sort()
             lr = self.scheduler.get_last_lr()[0]
             model_dict = self.global_model.state_dict()
-
+        
             for id in self.selected_clients:
                client = self.clients[id]
                client.train_withfc_fisher(round_idx, lr, model_dict)
-               
                data =self.testset[client.domain]
                loader = DataLoader(data, batch_size=512)
+            #    client.train(round_idx, lr, model_dict)
                testacc=self.test_client(id,client.domain,loader)
                self.printer.info(f'the test acc of client {id} in {round_idx}/{self.global_rounds} is {testacc}')
                log_dict = {f'client_{id}_test_acc': testacc}
@@ -203,6 +203,7 @@ class ServerBasePlus(ServerBase):
 
         print_log += f'avg_acc_of_fisher: {avg_acc:.2f}%; best_acc_of_fisher: {self.best_acc_fisher["global"] :.2f}%'    
         self.printer.info(print_log)
+        
     def aggregate_models_fisher(self, round_idx,ls):
         """
         get local models from selected clients and aggregate them
@@ -284,6 +285,8 @@ class ClientBasePlus(ClientBase):
       
     def train_withfc_fisher(self, round_idx, lr, state_dict):
         self.prepare(lr, state_dict)
+        if(round_idx%3==0 and round_idx!=0):
+            self.local_steps-=10
         self.model.train(True)
         loss_meter = AverageMeter()
         for step in range(self.local_steps):
@@ -296,12 +299,11 @@ class ClientBasePlus(ClientBase):
                 loss = self.ls_func(logits, y)
                 self.optimizer.zero_grad()
                 loss.backward()
-                clip_grad_norm_(self.model.parameters(), self.clip_grad)
                 self.optimizer.step()
                 loss_meter.update(loss.item(), y.size(0))
             self.printer.info(f'C{self.id:<2d}:{step}/{self.local_steps} >> avg loss {loss_meter.avg:.2f}')
             
-        torch.cuda.empty_cache()  # 清理缓存，释放GPU内存
+        
         self.model.eval()
         for batch in self.loader:
             # 将数据和标签移到GPU
@@ -317,8 +319,46 @@ class ClientBasePlus(ClientBase):
         self.fisher=fisher_batch.get_diag()
 
         self.model.to('cpu')  # 计算完后将模型移回CPU
-        torch.cuda.empty_cache()  # 清理缓存，释放GPU内存
+    
+    # def train(self, round_idx, lr, state_dict,loader):
+    #     self.prepare(lr, state_dict)
+    #     self.model.train(True)
+    #     self.scheduler = CosineAnnealingLR(self.optimizer, T_max=100)
+    #     loss_meter = AverageMeter()
+    #     for step in range(self.local_steps):
+    #         loss_meter.reset()
+    #         for data in self.loader:
+    #             x, y = data['x'].to(self.device), data['y'].to(self.device)
+    #             if len(y) < 2:
+    #                 continue
+    #             logits = self.model(x)
+    #             loss = self.ls_func(logits, y)
+    #             self.optimizer.zero_grad()
+    #             loss.backward()
+    #             self.optimizer.step()
+    #             loss_meter.update(loss.item(), y.size(0))
+    #             # 每完成一个 epoch（一个 step），更新学习率
+    #         self.scheduler.step()
+            
+    #         self.printer.info(f'C{self.id:<2d}:{step}/{self.local_steps} >> avg loss {loss_meter.avg:.2f}')
+    #         testacc=self.test_client(loader)
+    #         self.printer.info(f'the test acc of client in is {testacc}')
+    #     self.model.to('cpu')
+
         
 
-   
-
+    @torch.no_grad()
+    def test_client(self, loader):
+        all_y, all_logits = [], []
+        model=self.model
+        model.train(False)
+        model.to(self.device)
+        for data in loader:   
+            x, y = data['x'].to(self.device), data['y'].to(self.device)
+            logits = model(x)
+            all_y.append(y)
+            all_logits.append(logits)
+        y = torch.cat(all_y, dim=0)
+        logits = torch.cat(all_logits, dim=0)
+        test_acc = (y == torch.argmax(logits, dim=1)).float().mean().item() * 100
+        return test_acc

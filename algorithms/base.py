@@ -64,7 +64,24 @@ class ServerBase(object):
             data_idx = split_dataset(dm_set, args, client_per_domain)
             clt_set[dm] = (dm_set, data_idx)
         return clt_set, testset
-
+    
+    @torch.no_grad()
+    def test_client(self,id,data_name, loader):
+        self.printer.debug(f'-----------------testing on {data_name}-----------------')
+        all_y, all_logits = [], []
+        model=self.clients[id].model
+        model.train(False)
+        model.to(self.device)
+        for data in loader:   
+            x, y = data['x'].to(self.device), data['y'].to(self.device)
+            logits = model(x)
+            all_y.append(y)
+            all_logits.append(logits)
+        y = torch.cat(all_y, dim=0)
+        logits = torch.cat(all_logits, dim=0)
+        test_acc = (y == torch.argmax(logits, dim=1)).float().mean().item() * 100
+        return test_acc
+    
     def make_norm_dataset(self):
         self.printer.debug(f'make norm dataset')
         dset = {}
@@ -186,12 +203,21 @@ class ServerBase(object):
             for id in self.selected_clients:
                client = self.clients[id]
                client.train(round_idx, lr, model_dict)
-            
+               data =self.testset[client.domain]
+               loader = DataLoader(data, batch_size=512)
+               testacc=self.test_client(id,client.domain,loader)
+               self.printer.info(f'the test acc of client {id} in {round_idx}/{self.global_rounds} is {testacc}')
+               log_dict = {f'client_{id}_test_acc': testacc}
+               self.logger.log(log_dict,step=round_idx)
+               
             self.aggregate_models(round_idx)
             cuda.empty_cache() 
             if self.sBN:
                 make_batchnorm_stats(self.batchnorm_dataset, self.global_model, self.device)
-            self.evaluate(round_idx)
+            final_acc=self.evaluated_new(round_idx)
+            log_dict = {f'final_test_acc': final_acc}
+            self.logger.log(log_dict,step=round_idx)
+            
             self.printer.info(f'{round_idx}/{self.global_rounds} cost: {(time.time() - st_time) / 60:.2f} min')
             self.printer.info('-' * 30)
     
@@ -234,7 +260,46 @@ class ServerBase(object):
         self.printer.info(print_log)
         self.printer.info(f'evaluation cost: {(time.time() - st)/60:.2f} min')
 
+    def evaluated_new(self, round_idx):
+        """
+        Evaluate the accuracy of current model on each domain testset
+        
+        """
+        st = time.time()
+        acc_ls = []
+        print_log = 'Evaluation: '
+        for name in self.subset_list:
+            data =self.testset[name]
+            loader = DataLoader(data, batch_size=512)
+            acc = self.test(name, loader)
+            acc_ls.append(acc)
+            if self.best_acc.get(name):
+                if acc > self.best_acc[name]:
+                    self.best_acc[name] = acc
+            else:
+                self.best_acc[name] = acc
+            log_dict = {f'{name}_test_acc': acc, f'{name}_best_acc': self.best_acc[name]}
+            self.logger.log(log_dict, step=round_idx)
+            print_log += f'{name}: {acc:.2f}%; '
+        
+        avg_acc = sum(acc_ls) / len(acc_ls)
+        best = False
+        if self.best_acc.get('global'):
+            if avg_acc > self.best_acc['global']:
+                self.best_acc['global'] = avg_acc
+                best = True
+        else:
+            self.best_acc['global'] = avg_acc
+        
+        log_dict = {f'global_test_acc': avg_acc, f'global_best_acc': self.best_acc['global']}
+        self.logger.log(log_dict, step=round_idx)
 
+        print_log += f'avg_acc: {avg_acc:.2f}%; best_acc: {self.best_acc["global"] :.2f}%'
+        self.save_model(round_idx, best=best)
+        self.printer.info(print_log)
+        self.printer.info(f'evaluation cost: {(time.time() - st)/60:.2f} min')
+        return avg_acc
+        
     def save_model(self, round, best=False):
         save_path = os.path.join(self.save_dir, self.exp_tag)
         if not os.path.exists(save_path):
@@ -271,6 +336,8 @@ class ClientBase(object):
         self.loader = DataLoader(trainset, batch_size=args.c_bs, shuffle=True)
         self.ls_func = nn.CrossEntropyLoss()
         self.local_round=0
+        client_per_domain=self.num_classes//len(args.subset_list)
+        self.domain=args.subset_list[id//client_per_domain]
         
 
     def make_model(self):
